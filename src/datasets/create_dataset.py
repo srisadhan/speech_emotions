@@ -149,7 +149,7 @@ def pad_zerosTo_waveforms(config):
                         if (emotion == '01') and (intensity == '02'):
                             continue
                         else:
-                            temp = torch.zeros(1, max_speech_period, dtype=torch.float64)
+                            temp = torch.zeros(1, max_speech_period)
                             temp_len = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition].numpy().shape[1]
                             
                             # sometimes two channels are created for the waveforms and both the channels represent the same data
@@ -222,7 +222,7 @@ def extract_MelSpectrogram(config, intensity_flag):
         intensity_flag {bool} -- True if intensities are considered, otherwise False
     """
     # path to save the raw data
-    if intensity_flag:
+    if not intensity_flag:
         speech_1_path = Path(__file__).parents[2] / config['speech1_no_intensity']
         speech_2_path = Path(__file__).parents[2] / config['speech2_no_intensity']
     else:

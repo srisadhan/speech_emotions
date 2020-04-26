@@ -15,6 +15,8 @@ The speech files have the following information encoded in the filename. The num
 
 
 # Instructions to run the file:
+1) If a folder named 'data' is missing in the base folder please create a folder named 'data' in the main folder (speech_emotions) and a folder named 'raw', 'interim', and 'processed' inside the data folder
+
 Replace the 'skip' term with 'run' in the functions that you want to run as shown below
 - To **skip** : with skip_run('**skip**', 'download_RAVDESS_data') as check, check():
 - To **run**  : with skip_run('**run**', 'download_RAVDESS_data') as check, check():
