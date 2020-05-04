@@ -1,3 +1,9 @@
+import sys
+import os
+#nopep8
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.getcwd())
+
 import wget 
 import zipfile
 import collections
@@ -7,6 +13,12 @@ import torchaudio
 import deepdish as dd
 from pathlib import Path
 import matplotlib.pyplot as plt 
+import soundfile
+import webrtcvad
+import numpy as np
+from scipy.ndimage import binary_dilation
+import librosa
+
 
 def download_dataset(url, config):
     """Downloads the dataset from the provided url and extract the files into the user provided location
@@ -39,7 +51,13 @@ def extract_using_torchaudio(config):
 
     """
     filepath = Path(__file__).parents[2] / config['raw_audio_data']
-    
+    VAD = webrtcvad.Vad(config['vad_mode'])
+
+    if config['remove_silences']: # if True func is preprocess else func is empty:returns passed in values
+        func = preprocess 
+    else:
+        func = lambda x,y,z: x
+
     for statement in config['statements']:
         
         actor_dict = collections.defaultdict()
@@ -67,7 +85,10 @@ def extract_using_torchaudio(config):
                                 file_info = sample_name.split('-')
                                 
                                 if (file_info[4] == statement) and (file_info[2] == emotion) and (file_info[3] == intensity) and (file_info[5] == repetition):
-                                    waveform, sample_rate = torchaudio.load(sample_path)
+                                    # waveform, sample_rate = torchaudio.load(sample_path)
+
+                                    waveform,sample_rate = librosa.load(str(sample_path),mono=True,sr=None)
+                                    waveform = torch.Tensor(func(waveform,config,VAD))
                                     repetition_dict['repete_' + repetition] = waveform
                     
                     intensity_dict['intensity_' + intensity] = repetition_dict
@@ -113,7 +134,7 @@ def find_maximum_speech_period(speech_1_path, speech_2_path, config):
                         if (emotion == '01') and (intensity == '02'):
                             continue
                         else:
-                            temp_size = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition].numpy().shape[1]
+                            temp_size = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition].numpy().shape[0]
                             if temp_size > max_speech_period:
                                 max_speech_period = temp_size
     return max_speech_period
@@ -150,11 +171,12 @@ def pad_zerosTo_waveforms(config):
                             continue
                         else:
                             temp = torch.zeros(1, max_speech_period)
-                            temp_len = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition].numpy().shape[1]
+                            temp_len = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition].numpy().shape[0]
                             
                             # sometimes two channels are created for the waveforms and both the channels represent the same data
                             # try to only copy data from one channel
-                            temp[0, :temp_len] = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition][0,:]
+                            
+                            temp[0, :temp_len] = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition][:]
                             data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition] = temp
  
         if statement == '01':
@@ -214,7 +236,7 @@ def club_intensities_as_repetitions(config):
             print('Something is wrong, the file did not return into correct dictionary')
 
 
-def extract_MelSpectrogram(config, intensity_flag):
+def extract_MelSpectrogram(config, intensity_flag, zero_pad_flag):
     """Extracts MelSpectrogram for the waveforms imported from the audio files
     
     Arguments:
@@ -222,13 +244,17 @@ def extract_MelSpectrogram(config, intensity_flag):
         intensity_flag {bool} -- True if intensities are considered, otherwise False
     """
     # path to save the raw data
-    if not intensity_flag:
+    if not zero_pad_flag:
+        speech_1_path = Path(__file__).parents[2] / config['speech1_data_raw']
+        speech_2_path = Path(__file__).parents[2] / config['speech2_data_raw']
+    elif not intensity_flag:
         speech_1_path = Path(__file__).parents[2] / config['speech1_no_intensity']
         speech_2_path = Path(__file__).parents[2] / config['speech2_no_intensity']
     else:
         speech_1_path = Path(__file__).parents[2] / config['speech1_data_refactor']
         speech_2_path = Path(__file__).parents[2] / config['speech2_data_refactor']
-        
+
+    max_speech_period = find_maximum_speech_period(speech_1_path, speech_2_path, config)
     
     for statement in config['statements']:
         if statement == '01':
@@ -247,17 +273,91 @@ def extract_MelSpectrogram(config, intensity_flag):
                                 continue
                             else:
                                 waveform = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition]
-                                specgram = torchaudio.transforms.MelSpectrogram()(waveform)
+                                specgram = torchaudio.transforms.MelSpectrogram(n_mels=config['n_mels'],
+                                                                                n_fft=config['n_fft'],
+                                                                                hop_length=config['hop_length'],
+                                                                                win_length=config['win_length'])(waveform)
+                                specgram = dynamic_range_compression(specgram)
                                 data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition] = specgram
+                                torchaudio.transforms.MelSpectrogram()
                 else:
                     for repetition in ['repete_01', 'repete_02', 'repete_03', 'repete_04']:                            
                         waveform = data[actorname]['emotion_'+emotion]['repete_' + repetition]
                         specgram = torchaudio.transforms.MelSpectrogram()(waveform)
                         data[actorname]['emotion_'+emotion]['repete_' + repetition] = specgram
-
+        
         if statement == '01':
             dd.io.save((Path(__file__).parents[2] / config['speech1_MelSpec']), data)
         elif statement == '02':
             dd.io.save((Path(__file__).parents[2] / config['speech2_MelSpec']), data)
         else:
             print('Something is wrong, the file did not return the spectogram correctly')
+
+
+
+def normalization(aud, norm_type='peak'):
+    """
+    Summary:
+    
+    Args:
+    
+    Returns:
+    
+    """
+    try:
+        assert len(aud) > 0
+        if norm_type is 'peak':
+            aud = aud / np.max(aud)
+
+        elif norm_type is 'rms':
+            dbfs_diff = DBFS - (20 *
+                                np.log10(np.sqrt(np.mean(np.square(aud)))))
+            if DBFS > 0:
+                aud = aud * np.power(10, dbfs_diff / 20)
+
+        return aud
+    except AssertionError as e:
+        raise AssertionError("Empty audio sig")
+
+
+def preprocess(aud,config,VAD):
+    """
+    Summary:
+    
+    Args:
+    
+    Returns:
+    
+    """
+
+    aud = librosa.resample(aud, config['sample_rate'], config['resampling_rate'])
+    smoothing_wsize = int(config['smoothing_wsize']*config['resampling_rate']/1000)
+    trim_len = len(aud) % smoothing_wsize
+    aud = np.append(aud, np.zeros(smoothing_wsize - trim_len))
+    assert len(aud) % smoothing_wsize == 0, print(len(aud) % trim_len, aud)
+
+    pcm_16 = np.round(
+        (np.iinfo(np.int16).max * aud)).astype(np.int16).tobytes()
+    voices = [
+        VAD.is_speech(pcm_16[2 * ix:2 * (ix + smoothing_wsize)],
+                      sample_rate=config['resampling_rate'])
+        for ix in range(0, len(aud), smoothing_wsize)
+    ]
+    smoothing_mask = np.repeat(
+        binary_dilation(voices, np.ones(config['smoothing_length'])), smoothing_wsize)
+    aud = aud[smoothing_mask]
+    try:
+        aud = normalization(aud, norm_type='peak')
+        return aud
+
+    except AssertionError as e:
+        raise AssertionError("Empty audio sig")
+
+
+def dynamic_range_compression(x, C=1, clip_val=1e-5):
+    """
+    PARAMS
+    ------
+    C: compression factor
+    """
+    return torch.log(torch.clamp(x, min=clip_val) * C)

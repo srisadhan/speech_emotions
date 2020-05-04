@@ -10,7 +10,17 @@ statements:   [ '01',  '02']
 
 # audio parameters
 sample_rate : 48000 # verified for all the files
-
+resampling_rate : 16000
+n_mels : 80
+n_fft : 1024
+hop_length : 256
+win_length : 1024
+mel_seg_length : 64 #asl/hl
+audio_seg_length : 16000
+smoothing_wsize : 30
+smoothing_length : 6
+vad_mode : 3
+remove_silences : True
 
 # filepath parameters
 raw_audio_data              : 'data/raw/'
@@ -22,4 +32,15 @@ speech1_no_intensity        : 'data/interim/speech1_no_intensity.h5'
 speech2_no_intensity        : 'data/interim/speech2_no_intensity.h5'
 speech1_MelSpec             : 'data/interim/speech1_MelSpec.h5'
 speech2_MelSpec             : 'data/interim/speech2_MelSpec.h5'     
+interim_data_dir                 : 'data/interim'
+proc_data_dir                 : 'data/proc'
+model_save_dir : 'models_/'
+vis_dir : 'data/vis/'
+runs_dir : 'runs/'
 
+#model params
+mel_spec_size_conv : (80,64) #mels mel_seg_length
+batch_size : 3
+
+# Encoder parameters
+emo_z_hidden_dim : 16

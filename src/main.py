@@ -44,19 +44,19 @@ with skip_run('skip', 'download_RAVDESS_data') as check, check():
     download_dataset(url, config)
 
 # import the data from .wav files and create a dictionary
-with skip_run('skip', 'import_audio_files') as check, check():
+with skip_run('run', 'import_audio_files') as check, check():
     extract_using_torchaudio(config)
     
 # pad the audio files with zeros to make them of same size 
-with skip_run('run', 'pad_zeros_to_waveforms_for_constant_length') as check, check():
+with skip_run('skip', 'pad_zeros_to_waveforms_for_constant_length') as check, check():
     pad_zerosTo_waveforms(config)
 
 
 # WARNING: only run it if you want to neglect the change in intensities
 # and copy in into repetitions
-with skip_run('run', 'include_intensities_as_repetitions') as check, check():
+with skip_run('skip', 'include_intensities_as_repetitions') as check, check():
     club_intensities_as_repetitions(config)
 
 with skip_run('run', 'import_audio_files') as check, check():
-    extract_MelSpectrogram(config, True)
+    extract_MelSpectrogram(config, True,False)
     

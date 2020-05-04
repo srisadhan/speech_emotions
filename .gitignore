@@ -90,3 +90,7 @@ target/
 
 # Pytest cache
 .pytest_cache/
+
+#model summaries
+runs/
+models_/
