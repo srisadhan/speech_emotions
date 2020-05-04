@@ -205,7 +205,7 @@ class EMOTIONET(nn.Module):
                 self.writer.add_scalar('KL div', loss1.data.item(), epoch)
 
             if epoch % 1000 == 0:
-                aud = self.griffin_lim(outs[-1].data.numpy())
+                aud = self.griffin_lim_aud(outs[-1].data.numpy())
                 torch.save(
                     {
                         'epoch': self.epoch,
@@ -266,10 +266,10 @@ class EMOTIONET(nn.Module):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--device",
-                        help="cpu or cuda",
-                        default='cuda',
-                        choices=['cpu', 'cuda'])
+    # parser.add_argument("--device",
+    #                     help="cpu or cuda",
+    #                     default='cuda',
+    #                     choices=['cpu', 'cuda'])
     parser.add_argument("--dataset_train",
                         help="path to train_dataset",
                         required=True)
@@ -294,7 +294,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    device = torch.device(args.device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device(args.device)
     loss_ = torch.nn.CrossEntropyLoss(reduction='sum')
     encoder = EMOTIONET(dataset_train=args.dataset_train,
                         dataset_val=args.dataset_val,

@@ -26,3 +26,8 @@ All the files are stored as .h5 files in data folder for example "data/interim/f
 the structure of the dictionaries:
  - speech1 ("Kids are talking by the door") and speech2 ("Dogs are sitting by the door") are separatedly stored as dictionaries.
  - the structure of dictionaries are data['Actor_#']['emotion_#']['intensity_#']['repete_#'], here # are the numbers mentioned in the file information above
+
+
+Some important resources:
+1) Discovering Neural wirings: https://mitchellnw.github.io/blog/2019/dnw/
+2) The super Duper NLP repo: https://notebooks.quantumstat.com/
