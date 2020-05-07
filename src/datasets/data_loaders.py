@@ -41,7 +41,9 @@ class HDF5TorchDataset(data.Dataset):
         self.device = device
 
     def __len__(self):
-        return len(self.actors) + int(1e4)
+        # FIXME: What should be the size here?
+        # return len(self.actors) * len(config['emotions']) * len(config['repetitions'])
+        return len(self.actors)  + int(1e2)
     
     def __get_dd_paths__(self, actors, intensity, emotion):
 
@@ -75,8 +77,11 @@ class HDF5TorchDataset(data.Dataset):
             rand_intensity = config['intensities']
 
         emotion_path = self.__get_dd_paths__(rand_actor,rand_intensity,rand_emotion)
-        emotion = dd.io.load(self.hdf5_file, emotion_path)
-        emotion = self.__get_rand_segs__(emotion)
+        emotions = dd.io.load(self.hdf5_file, emotion_path)
+        emotion = self.__get_rand_segs__(emotions)
+        # print(emotion.size())
+        # for 
+        
         return emotion.to(device=self.device)
 
 if __name__ == "__main__":
@@ -85,7 +90,7 @@ if __name__ == "__main__":
     for i, x in enumerate(loader):
         print(x.shape)
         S_dB = librosa.power_to_db(x[0], ref=np.max)
-        librosa.display.specshow(x[0].data.numpy(),
+        librosa.display.specshow(S_dB,
                                  x_axis='s',
                                  y_axis='mel',
                                  sr=16000,

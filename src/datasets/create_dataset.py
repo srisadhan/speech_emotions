@@ -88,6 +88,8 @@ def extract_using_torchaudio(config):
                                     # waveform, sample_rate = torchaudio.load(sample_path)
 
                                     waveform,sample_rate = librosa.load(str(sample_path),mono=True,sr=None)
+                                    assert sample_rate == config['sample_rate'], 'sampling rate does not match'
+                                    
                                     waveform = torch.Tensor(func(waveform,config,VAD))
                                     repetition_dict['repete_' + repetition] = waveform
                     
@@ -105,12 +107,13 @@ def extract_using_torchaudio(config):
             print('Something is wrong, the file did not return into correct dictionary')
 
 
-def find_maximum_speech_period(speech_1_path, speech_2_path, config): 
+def find_maximum_speech_period(speech_1_path, speech_2_path, statement, config): 
     """find the speech sample with maximum time period and return its length
     
     Arguments:
         speech_1_path {path} -- path to the raw speech_1
         speech_2_path {path} -- path to the raw speech_2
+        statement {string}   -- which statement to use
     
     Returns:
         max_speech_period {int} -- maximal length of the time series speech signal
@@ -119,24 +122,24 @@ def find_maximum_speech_period(speech_1_path, speech_2_path, config):
     # Initialize the maximum length of the speech 
     max_speech_period = 0
     
-    for statement in config['statements']:
-        if statement == '01':
-            data = dd.io.load(speech_1_path)
-        else:
-            data = dd.io.load(speech_2_path)
+    if statement == '01':
+        data = dd.io.load(speech_1_path)
+    else:
+        data = dd.io.load(speech_2_path)
 
-        for id in config['actors']:
-            actorname = 'Actor_' + id
-            for emotion in config['emotions']:
-                for intensity in config['intensities']:
-                    for repetition in config['repetitions']:
-                        # There are no available files for 02 intensity and 01 emotion
-                        if (emotion == '01') and (intensity == '02'):
-                            continue
-                        else:
-                            temp_size = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition].numpy().shape[0]
-                            if temp_size > max_speech_period:
-                                max_speech_period = temp_size
+    for id in config['actors']:
+        actorname = 'Actor_' + id
+        for emotion in config['emotions']:
+            for intensity in config['intensities']:
+                for repetition in config['repetitions']:
+                    # There are no available files for 02 intensity and 01 emotion
+                    if (emotion == '01') and (intensity == '02'):
+                        continue
+                    else:
+                        temp_size = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition].numpy().shape[0]
+                        if temp_size > max_speech_period:
+                            max_speech_period = temp_size
+                            # print(actorname, 'emotion_', emotion, 'intensity_', intensity, 'repete_', repetition, ' : ',max_speech_period)
     return max_speech_period
 
 
@@ -151,9 +154,6 @@ def pad_zerosTo_waveforms(config):
     speech_1_path = Path(__file__).parents[2] / config['speech1_data_raw']
     speech_2_path = Path(__file__).parents[2] / config['speech2_data_raw']
 
-    # Step 1: calculate the maximum period of the audio signal from all the actors
-    max_speech_period = find_maximum_speech_period(speech_1_path, speech_2_path, config)
-    
     # Step 2: pad the audio files with zeros to make them of constant length
     for statement in config['statements']:
         if statement == '01':
@@ -161,6 +161,9 @@ def pad_zerosTo_waveforms(config):
         else:
             data = dd.io.load(speech_2_path)
 
+        # calculate the maximum period of the audio signal from all the actors
+        max_speech_period = find_maximum_speech_period(speech_1_path, speech_2_path, statement, config)
+    
         for id in config['actors']:
             actorname = 'Actor_' + id
             for emotion in config['emotions']:
@@ -170,13 +173,13 @@ def pad_zerosTo_waveforms(config):
                         if (emotion == '01') and (intensity == '02'):
                             continue
                         else:
-                            temp = torch.zeros(1, max_speech_period)
+                            temp = torch.zeros(max_speech_period)
                             temp_len = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition].numpy().shape[0]
                             
                             # sometimes two channels are created for the waveforms and both the channels represent the same data
                             # try to only copy data from one channel
                             
-                            temp[0, :temp_len] = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition][:]
+                            temp[:temp_len] = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition][:]
                             data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition] = temp
  
         if statement == '01':
@@ -254,7 +257,7 @@ def extract_MelSpectrogram(config, intensity_flag, zero_pad_flag):
         speech_1_path = Path(__file__).parents[2] / config['speech1_data_refactor']
         speech_2_path = Path(__file__).parents[2] / config['speech2_data_refactor']
 
-    max_speech_period = find_maximum_speech_period(speech_1_path, speech_2_path, config)
+    # max_speech_period = find_maximum_speech_period(speech_1_path, speech_2_path, statement, config)
     
     for statement in config['statements']:
         if statement == '01':
@@ -273,17 +276,40 @@ def extract_MelSpectrogram(config, intensity_flag, zero_pad_flag):
                                 continue
                             else:
                                 waveform = data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition]
-                                specgram = torchaudio.transforms.MelSpectrogram(n_mels=config['n_mels'],
-                                                                                n_fft=config['n_fft'],
-                                                                                hop_length=config['hop_length'],
-                                                                                win_length=config['win_length'])(waveform)
-                                specgram = dynamic_range_compression(specgram)
+                                # specgram = torchaudio.transforms.MelSpectrogram(sample_rate=config['resampling_rate'],
+                                                                                # n_mels=config['n_mels'],
+                                                                                # n_fft=config['n_fft'],
+                                                                                # hop_length=config['hop_length'],
+                                                                                # win_length=config['win_length'])(waveform)
+                                specgram = librosa.feature.melspectrogram(waveform.data.numpy(), 
+                                                                          n_mels=config['n_mels'],
+                                                                          sr=config['resampling_rate'],
+                                                                          n_fft=config['n_fft'], 
+                                                                          hop_length=config['hop_length'], 
+                                                                          win_length=config['win_length'])
+                                specgram = dynamic_range_compression(torch.Tensor(specgram))
+                                # print(waveform.data.numpy().shape, specgram.shape)
                                 data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition] = specgram
-                                torchaudio.transforms.MelSpectrogram()
                 else:
-                    for repetition in ['repete_01', 'repete_02', 'repete_03', 'repete_04']:                            
+                    if (emotion == '01'):
+                        repetitions = ['01', '02']
+                    else:
+                        repetitions = ['01', '02', '03', '04']
+                        
+                    for repetition in repetitions:                            
                         waveform = data[actorname]['emotion_'+emotion]['repete_' + repetition]
-                        specgram = torchaudio.transforms.MelSpectrogram()(waveform)
+                        # specgram = torchaudio.transforms.MelSpectrogram(sample_rate=config['resampling_rate'],
+                        #                                                         n_mels=config['n_mels'],
+                        #                                                         n_fft=config['n_fft'],
+                        #                                                         hop_length=config['hop_length'],
+                        #                                                         win_length=config['win_length'])(waveform)
+                        specgram = librosa.feature.melspectrogram(waveform.data.numpy(), 
+                                                                  n_mels=config['n_mels'],
+                                                                  sr=config['resampling_rate'],
+                                                                  n_fft=config['n_fft'], 
+                                                                  hop_length=config['hop_length'], 
+                                                                  win_length=config['win_length'])
+                        specgram = dynamic_range_compression(torch.Tensor(specgram))
                         data[actorname]['emotion_'+emotion]['repete_' + repetition] = specgram
         
         if statement == '01':
@@ -336,13 +362,11 @@ def preprocess(aud,config,VAD):
     aud = np.append(aud, np.zeros(smoothing_wsize - trim_len))
     assert len(aud) % smoothing_wsize == 0, print(len(aud) % trim_len, aud)
 
-    pcm_16 = np.round(
-        (np.iinfo(np.int16).max * aud)).astype(np.int16).tobytes()
-    voices = [
-        VAD.is_speech(pcm_16[2 * ix:2 * (ix + smoothing_wsize)],
-                      sample_rate=config['resampling_rate'])
-        for ix in range(0, len(aud), smoothing_wsize)
-    ]
+    pcm_16 = np.round((np.iinfo(np.int16).max * aud)).astype(np.int16).tobytes()
+    voices = [VAD.is_speech(pcm_16[2 * ix:2 * (ix + smoothing_wsize)],
+              sample_rate=config['resampling_rate'])
+              for ix in range(0, len(aud), smoothing_wsize)
+            ]
     smoothing_mask = np.repeat(
         binary_dilation(voices, np.ones(config['smoothing_length'])), smoothing_wsize)
     aud = aud[smoothing_mask]
@@ -360,4 +384,6 @@ def dynamic_range_compression(x, C=1, clip_val=1e-5):
     ------
     C: compression factor
     """
-    return torch.log(torch.clamp(x, min=clip_val) * C)
+    #FIXME: Don't use log here, torch.log is log_e not log_10
+    # return torch.log(torch.clamp(x, min=clip_val) * C)
+    return torch.clamp(x, min=clip_val)
