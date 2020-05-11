@@ -287,7 +287,13 @@ def extract_MelSpectrogram(config, intensity_flag, zero_pad_flag):
                                                                           n_fft=config['n_fft'], 
                                                                           hop_length=config['hop_length'], 
                                                                           win_length=config['win_length'])
-                                specgram = dynamic_range_compression(torch.Tensor(specgram))
+                                if config['use_logMel']:
+                                    spec = librosa.power_to_db(specgram)
+                                else:
+                                    spec = specgram
+                                
+                                specgram = dynamic_range_compression(torch.Tensor(spec))
+                                
                                 # print(waveform.data.numpy().shape, specgram.shape)
                                 data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition] = specgram
                 else:
@@ -309,7 +315,12 @@ def extract_MelSpectrogram(config, intensity_flag, zero_pad_flag):
                                                                   n_fft=config['n_fft'], 
                                                                   hop_length=config['hop_length'], 
                                                                   win_length=config['win_length'])
-                        specgram = dynamic_range_compression(torch.Tensor(specgram))
+                        if config['use_logMel']:
+                            spec = librosa.power_to_db(specgram.data.numpy())
+                        else:
+                            spec = specgram.data.numpy()
+                                    
+                        specgram = dynamic_range_compression(torch.Tensor(spec))
                         data[actorname]['emotion_'+emotion]['repete_' + repetition] = specgram
         
         if statement == '01':
@@ -386,4 +397,54 @@ def dynamic_range_compression(x, C=1, clip_val=1e-5):
     """
     #FIXME: Don't use log here, torch.log is log_e not log_10
     # return torch.log(torch.clamp(x, min=clip_val) * C)
-    return torch.clamp(x, min=clip_val)
+    
+    #FIXME: don't use clamp while using Log-MelSpectrogram
+    # return torch.clamp(x, min=clip_val)
+    
+    return torch.as_tensor(x)
+
+
+def constant_shaped_data_VAE(data, config):
+    """Prepare constant length spectrograms of size (n_mels x mel_seg_length)
+    for the Variation Auto Encoder
+
+    Parameters
+    ----------
+    data : dictionary
+        dictionary of Melspectrograms extracted for all the emotions from all the actors
+    config : dictionary
+        configurations mentioned in the config.yml file
+        
+    Returns
+    -------
+    features : tensor (n_samples, n_mels, mel_seg_length)
+        a 3d array of stacked spectrograms of emotions
+    labels : nd-array (n_samples, 1)
+        a 3d array of stacked spectrograms of emotions
+    """
+    
+    features = []
+    labels   = []
+    
+    for id in config['actors']:
+        for i, emotion in enumerate(config['emotions']):
+            for intensity in config['intensities']:
+                for repetition in config['repetitions']:
+                    # Emotion 01 - intensity 02 files are not present
+                    if (emotion == '01') and (intensity == '02'):
+                        continue
+                    else:
+                        temp = data['Actor_' + id]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition].numpy()        
+                        slice_ind = abs(temp.shape[1] - config['mel_seg_length']) // 2
+                        
+                        if temp.shape[1] < config['mel_seg_length']:
+                            features.append(librosa.util.fix_length(temp, config['mel_seg_length'], axis=1, mode='edge'))
+                        else:
+                            features.append(temp[:, slice_ind:slice_ind + config['mel_seg_length']])
+
+                        labels.append(i+1)
+    
+    features = torch.as_tensor(features)
+    labels   = torch.as_tensor(labels)
+         
+    return features, labels

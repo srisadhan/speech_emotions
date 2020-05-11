@@ -43,7 +43,7 @@ class HDF5TorchDataset(data.Dataset):
     def __len__(self):
         # FIXME: What should be the size here?
         # return len(self.actors) * len(config['emotions']) * len(config['repetitions'])
-        return len(self.actors)  + int(1e2)
+        return len(self.actors)  + int(1e3)
     
     def __get_dd_paths__(self, actors, intensity, emotion):
 
@@ -84,12 +84,38 @@ class HDF5TorchDataset(data.Dataset):
         
         return emotion.to(device=self.device)
 
+
+#####################################
+
+class HDF5TorchDataset2(data.Dataset):
+    def __init__(self, emotion_data_path, config, device=torch.device('cpu')):
+        self.hdf5_file =  config['const_MelSpec'] # overiding the path mentioned by the VAE config[emotion_data_path] 
+    
+        self.config = config
+        self.device = device
+
+    def __len__(self):
+        return len(config['actors']) * (len(config['emotions']) * len(config['repetitions']) * len(config['intensities']) - 2)
+     
+    def __getitem__(self,ix=0):        
+        data = dd.io.load(self.hdf5_file)
+        features, labels = data['features'], data['labels']
+        
+        # return features.to(device=self.device), labels.to(device=self.device)
+        return features[ix].to(device=self.device)
+    
+    
 if __name__ == "__main__":
     hdf5 = HDF5TorchDataset('speech1_MelSpec')
     loader = data.DataLoader(hdf5,batch_size=3)
     for i, x in enumerate(loader):
         print(x.shape)
-        S_dB = librosa.power_to_db(x[0], ref=np.max)
+        
+        if config['use_logMel']:
+            S_dB = librosa.power_to_db(x[0])
+        else:
+            S_dB = x[0]
+            
         librosa.display.specshow(S_dB,
                                  x_axis='s',
                                  y_axis='mel',

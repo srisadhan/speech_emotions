@@ -12,7 +12,7 @@ import soundfile
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.getcwd())
 
-from src.datasets.data_loaders import HDF5TorchDataset
+from src.datasets.data_loaders import HDF5TorchDataset, HDF5TorchDataset2
 import matplotlib.pyplot as plt
 import librosa
 from src.datasets.create_dataset import preprocess
@@ -42,34 +42,34 @@ class EMOTIONET(nn.Module):
         with open('src/config.yaml', 'r') as f:
             self.config = safe_load(f.read())
 
-        log_dir = os.path.join(
+        model_log_dir = os.path.join(
             self.config['model_save_dir'], '{}_{}'.format(dataset_train,
                                                     self.__class__.__name__))
-                
+        run_log_dir = os.path.join(
+            self.config['runs_dir'], '{}_{}'.format(dataset_train,
+                                                    self.__class__.__name__))
+        
         if not load_model:  
             model_save_dir = os.path.join(os.path.join(
-                                      log_dir, "run_{}".format(
-                                      len(os.listdir(log_dir)) if os.path.exists(log_dir) else 0))
+                                      model_log_dir, "run_{}".format(
+                                      len(os.listdir(model_log_dir)) if os.path.exists(model_log_dir) else 0))
                                       )
             self.model_save_string = os.path.join(
                     model_save_dir, self.__class__.__name__ + '_Epoch_{}.pt')
             
             os.makedirs(model_save_dir,exist_ok=True)
             os.makedirs(self.config['vis_dir'],exist_ok=True)
+            
+            self.writer = SummaryWriter(log_dir=os.path.join(
+                                        run_log_dir, "run_{}".format(
+                                        len(os.listdir(run_log_dir)) if os.path.exists(run_log_dir) else 0)))
         else:
             model_save_dir = os.path.join(os.path.join(
-                                      log_dir, "run_{}".format(
-                                      len(os.listdir(log_dir)) - 1 if os.path.exists(log_dir) else 0))
+                                      model_log_dir, "run_{}".format(
+                                      len(os.listdir(model_log_dir)) - 1 if os.path.exists(model_log_dir) else 0))
                                       )
             self.model_save_string = os.path.join(
                 model_save_dir, self.__class__.__name__ + '_Epoch_{}.pt')
-            
-        log_dir = os.path.join(
-            self.config['runs_dir'], '{}_{}'.format(dataset_train,
-                                                    self.__class__.__name__))
-        self.writer = SummaryWriter(log_dir=os.path.join(
-            log_dir, "run_{}".format(
-                len(os.listdir(log_dir)) if os.path.exists(log_dir) else 0)))
 
         self.device = device
 
@@ -208,11 +208,6 @@ class EMOTIONET(nn.Module):
         for epoch in range(self.epoch, self.config['train_epochs']):
             self.epoch = epoch
             for i, data in enumerate(train_iterator):
-                # data = data.view(
-                #     -1,
-                #     self.config['mel_seg_length'],
-                #     self.config['n_mels'],
-                # )
 
                 opt.zero_grad()
 
@@ -241,6 +236,11 @@ class EMOTIONET(nn.Module):
                     }, self.model_save_string.format(epoch))
 
     def griffin_lim_aud(self, spec):
+        if self.config['use_logMel']:
+            spec = librosa.db_to_power(spec)
+        else:
+            spec = spec
+
         y = librosa.feature.inverse.mel_to_audio(
             spec,
             sr=self.config['resampling_rate'],
@@ -284,7 +284,12 @@ class EMOTIONET(nn.Module):
             x = self.decode(z)
             self.epoch = 'sample'
             if visualize:
-                S_dB = librosa.power_to_db(x[0].cpu().data.numpy(), ref=np.max)
+                if self.config['use_logMel']:
+                    S_dB = x[0].cpu().data.numpy()
+                else:
+                    S_dB = librosa.power_to_db(x[0].cpu().data_numpy())
+                    
+                # S_dB = librosa.power_to_db(x[0].cpu().data.numpy(), ref=np.max)
                 librosa.display.specshow(S_dB,
                                          x_axis='s',
                                          y_axis='mel',
@@ -343,16 +348,16 @@ class EMOTIONET2(nn.Module):
                                       len(os.listdir(model_log_dir)) - 1 if os.path.exists(model_log_dir) else 0))
                                       )
             self.model_save_string = os.path.join(
-                model_save_dir, self.__class__.__name__ + '_Epoch_{}.pt')
-            
-        
-        
+                model_save_dir, self.__class__.__name__ + '_Epoch_{}.pt')       
 
         self.device = device
 
-        self.dataset_train = HDF5TorchDataset(dataset_train, device=device)
-        self.dataset_val = HDF5TorchDataset(dataset_val, device=device)
-
+        # self.dataset_train = HDF5TorchDataset(dataset_train, device=device)
+        # self.dataset_val = HDF5TorchDataset(dataset_val, device=device)
+        
+        self.dataset_train = HDF5TorchDataset2(dataset_train, self.config, device=device)
+        
+        
         self.encoder = nn.Sequential(nn.Conv1d(self.config['n_mels'], 64, 4, 2, 1, 1), 
                                      nn.ReLU(True),                           
                                      nn.Conv1d(64, 32, 4, 2, 1), 
@@ -425,7 +430,6 @@ class EMOTIONET2(nn.Module):
         std = torch.exp(torch.div(logvar, 2)).to(device=self.device)
         eps = torch.empty(std.shape).normal_(0.0, 1.0).to(device=self.device)
         
-        # eps = -1
         z = mu + (eps * std)
 
         return z
@@ -471,11 +475,6 @@ class EMOTIONET2(nn.Module):
                                                      shuffle=True,
                                                      drop_last=True)
 
-        
-        self.val_iterator = torch.utils.data.DataLoader(self.dataset_val,
-                                                        batch_size=batch_size,
-                                                        shuffle=True,
-                                                        drop_last=True)
 
         if self.load_model:
             self.load_model_cpt(cpt=cpt)
@@ -511,16 +510,21 @@ class EMOTIONET2(nn.Module):
                     }, self.model_save_string.format(epoch))
 
     def griffin_lim_aud(self, spec):
-        y = librosa.feature.inverse.mel_to_audio(spec, #FIXME: log-Mel is used so converting it back to Mel
+        if self.config['use_logMel']:
+            spec = librosa.db_to_power(spec)
+        else:
+            spec = spec
+            
+        y = librosa.feature.inverse.mel_to_audio(spec,
                                             sr=self.config['resampling_rate'],
                                             n_fft=self.config['n_fft'],
                                             hop_length=self.config['hop_length'],
                                             win_length=self.config['win_length'])
 
         soundfile.write(os.path.join(self.config['vis_dir'],
-                                     '{}.wav'.format(self.epoch)),
-                        y,
-                        samplerate=self.config['resampling_rate'])
+                                    '{}.wav'.format(self.epoch)),
+                                    y,
+                                    samplerate=self.config['resampling_rate'])
         return y
 
     def load_model_cpt(self, cpt=0, opt=None, device=torch.device('cuda:0')):
@@ -538,35 +542,79 @@ class EMOTIONET2(nn.Module):
     def latent_sampling(self, visualize=True):
         with torch.no_grad():
             self.eval()
-            # mu = torch.rand(1, 8)
-            # logvar = torch.rand(1, 8)
             
-            #FIXME: only one variable should be sampled insted of all
-            mu = torch.zeros(1, 8)
-            logvar = torch.zeros(1, 8)
-            
-            mu[0,1] = 1* torch.rand(1)
-            logvar[0,1] = 1* torch.rand(1)
-            print(mu, logvar)
-            
-            z = self.reparameterize(mu, logvar)
-            x = self.decode(z)
-            self.epoch = 'sample'
-            if visualize:
-                S_dB = librosa.power_to_db(x[0].cpu().data.numpy(), ref=np.max)
-                librosa.display.specshow(S_dB, #x[0].cpu().data.numpy(),
-                                         x_axis='s',
-                                         y_axis='mel',
-                                         sr=16000,
-                                         fmax=8000,
-                                         cmap='viridis')
-                plt.colorbar(format='%+2.0f dB')
-                plt.title('Mel-frequency spectrogram')
-                plt.tight_layout()
-                plt.show()
-            aud = self.griffin_lim_aud(x[0].cpu().data.numpy())
+            for i in range(len(self.config['emotions'])):
+                mu = torch.zeros(1, 8)
+                logvar = torch.zeros(1, 8)
+                
+                mu[0,i] = 0.5 #torch.rand(1)
+                logvar[0,i] = 0.5 #torch.rand(1)
+                print(mu, logvar)
+                
+                z = self.reparameterize(mu, logvar)
+                x = self.decode(z)
+                self.epoch = 'sample_emotion_' + str(i + 1) 
+                if visualize:
+                    if self.config['use_logMel']:
+                        S_dB = x[0].cpu().data.numpy()
+                    else:
+                        S_dB = librosa.power_to_db(x[0].cpu().data.numpy())
+                    
+                    plt.figure()
+                    # S_dB = librosa.power_to_db(x[0].cpu().data.numpy(), ref=np.max)
+                    librosa.display.specshow(S_dB, #x[0].cpu().data.numpy(),
+                                            x_axis='s',
+                                            y_axis='mel',
+                                            sr=16000,
+                                            fmax=8000,
+                                            cmap='viridis')
+                    plt.colorbar(format='%+2.0f dB')
+                    plt.title('Mel-frequency spectrogram')
+                    plt.tight_layout()  
+                aud = self.griffin_lim_aud(x[0].cpu().data.numpy())
+                
+        plt.show()
         self.train()
+    
+    def latent_testing(self, visualize=True):
+        with torch.no_grad():
+            self.eval()
+            
+            for i in range(len(self.config['emotions'])):
+                # z = torch.normal(0.0, 1.0, size=(1, self.config['latent_vars'])).to(device=self.device)
+                z = torch.zeros((1, self.config['latent_vars']))
+                z[0, i] = torch.normal(0.0, 3.0, size=(1,1))
+                
+                z = z.to(device=self.device)
+                x = self.decode(z)
+                self.epoch = 'sample_emotion_' + str(i + 1) 
+                if visualize:
+                    if self.config['use_logMel']:
+                        S_dB = x[0].cpu().data.numpy()
+                    else:
+                        S_dB = librosa.power_to_db(x[0].cpu().data.numpy())
+                    
+                    plt.figure()
+                    # S_dB = librosa.power_to_db(x[0].cpu().data.numpy(), ref=np.max)
+                    librosa.display.specshow(S_dB, #x[0].cpu().data.numpy(),
+                                            x_axis='s',
+                                            y_axis='mel',
+                                            sr=16000,
+                                            fmax=8000,
+                                            cmap='viridis')
+                    # plt.colorbar(format='%+2.0f dB')
+                    # plt.title('Mel-frequency spectrogram')
+                    plt.xticks([])
+                    plt.yticks([])
+                    plt.xlabel('')
+                    plt.ylabel('')
+                    plt.tight_layout()  
+                aud = self.griffin_lim_aud(x[0].cpu().data.numpy())
+                
+        plt.show()
+        
 
+    # def 
 
 def binary_cross_entropy(r, x):
     "Drop in replacement until PyTorch adds `reduce` keyword."

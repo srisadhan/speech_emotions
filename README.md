@@ -31,3 +31,16 @@ the structure of the dictionaries:
 Some important resources:
 1) Discovering Neural wirings: https://mitchellnw.github.io/blog/2019/dnw/
 2) The super Duper NLP repo: https://notebooks.quantumstat.com/
+3) Variation auto encoders : https://www.jeremyjordan.me/variational-autoencoders/
+4) [Building an end-to-end Speech Recognition model in PyTorch](https://www.assemblyai.com/blog/end-to-end-speech-recognition-pytorch)
+
+Code Resources:
+1) Beta-VAE = https://github.com/1Konny/Beta-VAE
+2) Pytorch-VAE: https://github.com/AntixK/PyTorch-VAE
+3) Semi-Supervised PyTorch https://github.com/wnhsu/semi-supervised-pytorch
+4) Factorized Hierarchical Variational Autoencoders: https://github.com/wnhsu/FactorizedHierarchicalVAE
+5) [Predictive Speech VAE](https://github.com/sspringenberg/Speech-Aux-VAE)
+   
+Papers:
+1)[Unsupervised Learning of Disentangled andInterpretable Representations from Sequential Data](http://papers.nips.cc/paper/6784-unsupervised-learning-of-disentangled-and-interpretable-representations-from-sequential-data.pdf)
+1) 
