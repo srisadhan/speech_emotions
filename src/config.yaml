@@ -14,18 +14,21 @@ statements:   [ '01'] #,  '02']
 # audio parameters
 sample_rate         : 48000 # verified for all the files
 resampling_rate     : 16000
-n_mels              : 80
-n_fft               : 1024
-hop_length          : 256
+n_mels              : 40 #80
+n_fft               : 400 #1024
+hop_length          : 160 #256
 win_length          : 1024
 mel_seg_length      : 128 #64 #asl/hl
 audio_seg_length    : 16000
-smoothing_wsize     : 30
-smoothing_length    : 6
+smoothing_wsize     : 10 #30
+smoothing_length    : 3 #6
 vad_mode            : 3
 remove_silences     : True
 train_epochs        : 15000 # number of training epochs
 use_logMel          : True # convert the MelSpec (power) to log-MelSpec (dB)
+dbfs                : -30
+window_size         : 25
+window_step         : 10
 
 # filepath parameters
 raw_audio_data              : 'data/raw/'
@@ -39,7 +42,7 @@ speech1_MelSpec             : 'data/interim/speech1_MelSpec.h5'
 speech2_MelSpec             : 'data/interim/speech2_MelSpec.h5'     
 interim_data_dir            : 'data/interim'
 proc_data_dir               : 'data/proc'
-model_save_dir              : 'models_/'
+model_save_dir              : 'trained_models/'
 vis_dir                     : 'data/vis/'
 runs_dir                    : 'runs/'
 const_MelSpec               : 'data/processed/speech1_const_MelSpec.h5'
@@ -52,3 +55,13 @@ batch_size : 64 #64
 emo_z_hidden_dim : 16
 latent_vars      : 8
 beta             : 1.0  #beta parameter for beta-VAE
+
+# Speaker encoder specific parameters
+embedding_size      : 256
+hidden_size         : 256
+projection_size     : 64
+num_layers          : 3
+sliding_win_overlap : 0.5
+acc_count: 4
+sliding_win_size : 64 # frames
+uttr_count : 5
