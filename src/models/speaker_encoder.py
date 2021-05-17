@@ -13,6 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 from yaml import safe_load
 import os
 import sys
+import soundfile
 
 # from src.data.data_utils import ImbalancedDatasetSampler
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -220,7 +221,7 @@ class SPEAKER_ENCODER(nn.Module):
             aud = np.pad(aud, (0, max_aud_length - len(aud)), "constant")
 
         mel = mel_spectogram(aud).astype(np.float32).T
-        mels = np.array([mel[s] for s in mel_splits[0:1]])
+        mels = np.array([mel[s] for s in mel_splits])
 
         mels = torch.from_numpy(mels).to(self.device)
         embeds_all = []
@@ -390,11 +391,35 @@ if __name__ == "__main__":
         sim_matrix = encoder.sim_matrix_infer(fnames, cpt)
     elif args.mode == 'eval':
         aud1, _ = preprocess_aud(os.path.join(
-            encoder.config_yml['vis_dir'], '1.wav'))
+            encoder.config_yml['vis_dir'], 'speaker1.wav'))
         aud2, _ = preprocess_aud(os.path.join(
-            encoder.config_yml['vis_dir'], '1.wav'))
-
+            encoder.config_yml['vis_dir'], 'speaker33.wav'))
+        
+        soundfile.write(os.path.join(
+            encoder.config_yml['vis_dir'], 'aud1.wav'), 
+                        aud1,
+                        samplerate=16000)
+        soundfile.write(os.path.join(
+            encoder.config_yml['vis_dir'], 'aud2.wav'), 
+                        aud2,
+                        samplerate=16000)
+        
         embed1, _ = encoder.embed(aud1, group=True)
         embed2, _ = encoder.embed(aud2, group=True)
 
         print(embed1@embed2)
+        print(embed1.shape,embed2.shape)
+        
+        # fig, (ax1, ax2) = plt.subplots(2, 1)
+        # fig.suptitle('A tale of 2 subplots')
+
+        # ax1.plot(range(embed1.shape[1]),embed1.squeeze(), 'o-')
+        # ax1.set_xlabel('S1')
+
+        # ax2.plot(range(embed2.shape[1]),embed2.squeeze(), '.-')
+        # ax2.set_xlabel('S2`')
+
+
+        # plt.scatter(range(embed1.shape[1]),embed1.squeeze(),embed2.squeeze())
+        # plt.savefig(os.path.join(
+        #     encoder.config_yml['vis_dir'], 'plt.png'))

@@ -89,7 +89,8 @@ class HDF5TorchDataset(data.Dataset):
 
 class HDF5TorchDataset2(data.Dataset):
     def __init__(self, emotion_data_path, config, device=torch.device('cpu')):
-        self.hdf5_file =  config['const_MelSpec'] # overiding the path mentioned by the VAE config[emotion_data_path] 
+
+        self.hdf5_file =  emotion_data_path
     
         self.config = config
         self.device = device
@@ -104,7 +105,43 @@ class HDF5TorchDataset2(data.Dataset):
         # return features.to(device=self.device), labels.to(device=self.device)
         return features[ix].to(device=self.device)
     
+#########################################################
+class EmotionDataset(data.Dataset):
+    """Emotion Dataset loader"""
+    def __init__(self, emotion_data_path, embeddings_path):
+        super(EmotionDataset).__init__()
+        
+        self.path = emotion_data_path
+        self.embed_path = embeddings_path
+        self.features, self.embeds, self.labels = self.import_data()
+        
+    def import_data(self):
+        data = dd.io.load(self.path)
+        embeds = dd.io.load(self.embed_path)
+
+        features = data['features']
+        labels = data['labels']
+        embeds = embeds['speaker_embeds']
+
+        return features, embeds, labels
+        
+    def __len__(self):
+        return (self.features).shape[0]
     
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+        
+        if len(self.labels) > 0:
+            labels = self.labels[idx]
+        else:
+            labels = []
+            
+        samples = {'features': torch.tensor(self.features[idx, :, :], dtype=torch.float32, requires_grad=True),
+                   'speaker_embeds': torch.tensor(self.embeds[idx, :], dtype=torch.float32), 
+                   'labels': torch.tensor(labels, dtype=torch.long)}
+        return samples
+     
 if __name__ == "__main__":
     hdf5 = HDF5TorchDataset('speech1_MelSpec')
     loader = data.DataLoader(hdf5,batch_size=3)

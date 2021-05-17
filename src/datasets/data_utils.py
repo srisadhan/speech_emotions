@@ -43,7 +43,7 @@ RUNS_DIR = config['runs_dir']
 SAMPLING_RATE = config['resampling_rate']
 
 N_FFT = config['n_fft']
-H_L = config['n_fft']
+H_L = config['hop_length']
 STEP_SIZE_EM = int((SAMPLING_RATE/16)/H_L)
 MEL_CHANNELS = config['n_mels']
 SMOOTHING_LENGTH = config['smoothing_length']
@@ -357,6 +357,36 @@ def write_hdf5(out_file, data):
     proc_file.close()
     exit()
 
+def gender_from_speaker_id_RAVDESS(config, speaker_id):
+    """Obtain the gender from speaker id for RAVDESS dataset
+
+    Parameters
+    ----------
+    config : dictionary 
+        dictionary consisting of configurations loaded from config.yml
+    speaker_id : nd-array (N samples, )
+        numpy array with speaker id's between 01 and 24
+        
+    Returns
+    -------
+    gender_id : nd-array (N samples, )
+        numpy array representing gender of the speakers, 0 for Male and 1 for Female speakers 
+    
+    """
+    
+    male_actors   = [ int(entry) for entry in config['male_actors']]
+    female_actors = [ int(entry) for entry in config['female_actors']]
+    
+    gender_id = []
+    for id in speaker_id:
+        if id in male_actors:
+            gender_id.append(0)
+        elif id in female_actors:
+            gender_id.append(1)
+    
+    gender_id = np.array(gender_id, dtype=np.int).reshape(-1, )
+    return gender_id
+            
 
 if __name__ == "__main__":
     structure()

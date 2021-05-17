@@ -76,7 +76,11 @@ target/
 .ipynb_checkpoints/
 
 # exclude data from source control by default
-/data/
+data/
+runs/
+
+trained_models/*
+!trained_models/SPEAKER_ENCODER/
 
 # Mac OS-specific storage files
 .DS_Store

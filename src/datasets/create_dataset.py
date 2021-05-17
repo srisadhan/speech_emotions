@@ -48,8 +48,8 @@ def extract_using_torchaudio(config):
     
     Arguments:
         config {dictionary} -- configurations imported from the config.yaml file
-
     """
+        
     filepath = Path(__file__).parents[2] / config['raw_audio_data']
     VAD = webrtcvad.Vad(config['vad_mode'])
 
@@ -239,21 +239,26 @@ def club_intensities_as_repetitions(config):
             print('Something is wrong, the file did not return into correct dictionary')
 
 
-def extract_MelSpectrogram(config, intensity_flag, zero_pad_flag):
+def extract_MelSpectrogram(config, intensity_flag, zero_pad_flag, actors=None, data_save_path=None):
     """Extracts MelSpectrogram for the waveforms imported from the audio files
     
     Arguments:
         config {dictionary} -- configurations imported from the config.yaml file
         intensity_flag {bool} -- True if intensities are considered, otherwise False
+        actors {list} -- List of actor ids from RAVDESS dataset to extract Melspectrogram
+        data_save_path {str} -- Path to store the processed data, defaults to 'None'
     """
+    if not actors:
+        actors = config['actors']
+        
     # path to save the raw data
-    if not zero_pad_flag:
+    if not zero_pad_flag: # don't pad zeros to the data
         speech_1_path = Path(__file__).parents[2] / config['speech1_data_raw']
         speech_2_path = Path(__file__).parents[2] / config['speech2_data_raw']
-    elif not intensity_flag:
+    elif not intensity_flag: # consider speaker intensity as repetition of statement
         speech_1_path = Path(__file__).parents[2] / config['speech1_no_intensity']
         speech_2_path = Path(__file__).parents[2] / config['speech2_no_intensity']
-    else:
+    else: # 
         speech_1_path = Path(__file__).parents[2] / config['speech1_data_refactor']
         speech_2_path = Path(__file__).parents[2] / config['speech2_data_refactor']
 
@@ -265,7 +270,7 @@ def extract_MelSpectrogram(config, intensity_flag, zero_pad_flag):
         else:
             data = dd.io.load(speech_2_path)
 
-        for id in config['actors']:
+        for id in actors:
             actorname = 'Actor_' + id
             for emotion in config['emotions']:
                 if intensity_flag:
@@ -292,7 +297,9 @@ def extract_MelSpectrogram(config, intensity_flag, zero_pad_flag):
                                 else:
                                     spec = specgram
                                 
-                                specgram = dynamic_range_compression(torch.Tensor(spec))
+                                # Dynamic range compression or clipping is not used here because of log issue
+                                # specgram = dynamic_range_compression(torch.Tensor(spec))
+                                specgram = torch.Tensor(spec)
                                 
                                 # print(waveform.data.numpy().shape, specgram.shape)
                                 data[actorname]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition] = specgram
@@ -323,12 +330,15 @@ def extract_MelSpectrogram(config, intensity_flag, zero_pad_flag):
                         specgram = dynamic_range_compression(torch.Tensor(spec))
                         data[actorname]['emotion_'+emotion]['repete_' + repetition] = specgram
         
-        if statement == '01':
-            dd.io.save((Path(__file__).parents[2] / config['speech1_MelSpec']), data)
-        elif statement == '02':
-            dd.io.save((Path(__file__).parents[2] / config['speech2_MelSpec']), data)
+        if data_save_path:
+            dd.io.save(data_save_path, data)
         else:
-            print('Something is wrong, the file did not return the spectogram correctly')
+            if statement == '01':
+                dd.io.save((Path(__file__).parents[2] / config['speech1_MelSpec']), data)
+            elif statement == '02':
+                dd.io.save((Path(__file__).parents[2] / config['speech2_MelSpec']), data)
+            else:
+                print('Something is wrong, the file did not return the spectogram correctly')
 
 
 
@@ -382,7 +392,10 @@ def preprocess(aud,config,VAD):
         binary_dilation(voices, np.ones(config['smoothing_length'])), smoothing_wsize)
     aud = aud[smoothing_mask]
     try:
-        aud = normalization(aud, norm_type='peak')
+        if len(aud) > 0:
+            aud = normalization(aud, norm_type='peak')
+        else:
+            aud = np.zeros(3*config['resampling_rate'])
         return aud
 
     except AssertionError as e:
@@ -404,7 +417,7 @@ def dynamic_range_compression(x, C=1, clip_val=1e-5):
     return torch.as_tensor(x)
 
 
-def constant_shaped_data_VAE(data, config):
+def constant_shaped_spectrogram(data, config, actors=None):
     """Prepare constant length spectrograms of size (n_mels x mel_seg_length)
     for the Variation Auto Encoder
 
@@ -414,7 +427,9 @@ def constant_shaped_data_VAE(data, config):
         dictionary of Melspectrograms extracted for all the emotions from all the actors
     config : dictionary
         configurations mentioned in the config.yml file
-        
+    actors : list 
+        list of actors from RAVDESS dataset to be used for analysis 
+
     Returns
     -------
     features : tensor (n_samples, n_mels, mel_seg_length)
@@ -424,9 +439,13 @@ def constant_shaped_data_VAE(data, config):
     """
     
     features = []
-    labels   = []
+    labels   = [] # labels representing the emotion from 0-7
+    speaker_id   = [] # labels representing the speaker identity from 01-24, gender information can also be obtained from this 
     
-    for id in config['actors']:
+    if not actors:
+        actors = config['actors']
+    
+    for id in actors:
         for i, emotion in enumerate(config['emotions']):
             for intensity in config['intensities']:
                 for repetition in config['repetitions']:
@@ -442,9 +461,55 @@ def constant_shaped_data_VAE(data, config):
                         else:
                             features.append(temp[:, slice_ind:slice_ind + config['mel_seg_length']])
 
-                        labels.append(i+1)
-    
-    features = torch.as_tensor(features)
-    labels   = torch.as_tensor(labels)
+                        labels.append(i)
+                        speaker_id.append(int(id))
+                        
+    features = torch.as_tensor(features, dtype=torch.float32)
+    labels   = torch.as_tensor(labels, dtype=torch.long)
+    speaker_id   = torch.as_tensor(speaker_id)
          
-    return features, labels
+    return features, labels, speaker_id
+
+
+def pooled_waveform_dataset(data, config, actors=None):
+    """Pool all the waveforms and prepare feature and label set
+
+    Parameters
+    ----------
+    data : dictionary
+        dictionary of waveforms extracted for all the emotions from all the actors
+    config : dictionary
+        configurations mentioned in the config.yml file
+        
+    Returns
+    -------
+    features : tensor (n_samples, time)
+        a 3d array of stacked spectrograms of emotions
+    labels : nd-array (n_samples, 1)
+        a 3d array of stacked spectrograms of emotions
+    """
+    if not actors:
+        actors = config['actors']
+        
+    features = []
+    labels   = [] # labels representing the emotion from 0-7
+    speaker_id   = [] # labels representing the speaker identity from 01-24, gender information can also be obtained from this 
+    
+    for id in actors:
+        for i, emotion in enumerate(config['emotions']):
+            for intensity in config['intensities']:
+                for repetition in config['repetitions']:
+                    # Emotion 01 - intensity 02 files are not present
+                    if (emotion == '01') and (intensity == '02'):
+                        continue
+                    else:
+                        features.append(data['Actor_' + id]['emotion_'+emotion]['intensity_'+intensity]['repete_' + repetition].numpy())
+                        
+                        labels.append(i)
+                        speaker_id.append(int(id))
+                        
+    # features = torch.as_tensor(features)
+    labels   = torch.as_tensor(labels, dtype=torch.long)
+    speaker_id   = torch.as_tensor(speaker_id)
+         
+    return features, labels, speaker_id

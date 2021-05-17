@@ -1,7 +1,9 @@
-speech_emotion_learning
-==============================
+Learning Speech Emotion Representations
+=======================================
 
 learning representations for emotions in speech
+
+**Note: We use voice encoder from the Resemblyzer project. Link to the project: https://github.com/resemble-ai/Resemblyzer**
 
 # RAVDESS file information.
 The speech files have the following information encoded in the filename. The numbers denote the placeholders in the filename separated by '-'.
