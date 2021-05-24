@@ -33,6 +33,16 @@ dbfs                : -30
 window_size         : 25
 window_step         : 10
 
+# audio parameters for TacotronSTFT
+max_wav_value        : 32768.0
+sampling_rate_tron   : 22050
+n_fft_tron           : 1024
+hop_length_tron      : 256
+win_length_tron      : 1024
+n_mels_tron          : 80
+mel_fmin_tron        : 0.0
+mel_fmax_tron        : 8000.0
+
 # filepath parameters
 raw_audio_data              : 'data/raw/'
 speech1_data_raw            : 'data/interim/speech1_data.h5'
@@ -55,6 +65,7 @@ pooled_waveforms2           : 'data/processed/speech2_waveform.h5'
 umap_speaker_embeddings     : 'data/processed/umap_speaker_embeds.h5'
 umap_resemblyzer_embeds1    : 'data/processed/umap_resemblyzer_embeds1.h5'
 umap_resemblyzer_embeds2    : 'data/processed/umap_resemblyzer_embeds2.h5'
+waveglow_model              : 'trained_models/waveglow_256channels_universal_v5.pt'
 
 # test data
 const_test_MelSpec1         : 'data/processed/speech1_test_MelSpec.h5'

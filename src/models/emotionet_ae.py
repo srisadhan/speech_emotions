@@ -102,7 +102,11 @@ class EmotionNet_AE(nn.Module):
         self.alpha = 10
         self.mse_loss = nn.MSELoss(reduction='mean')
         self.ce_loss = nn.CrossEntropyLoss(reduction='mean')
-        
+        self.waveglow = torch.load(waveglow_path,map_location=torch.device('cpu'))['model']
+        self.waveglow.cpu().eval()
+        for k in self.waveglow.convinv:
+            k.float()
+        self.denoiser = Denoiser(self.waveglow)
         
     def conv_block(self, in_channels, out_channels, kernel_size, stride, dropout_prob):
         # pad the layers such that the output has the same size of input 
@@ -299,6 +303,17 @@ class EmotionNet_AE(nn.Module):
                                     samplerate=self.config['resampling_rate'])
         return y
 
+    def waveglow_aud(self,spec):
+        with torch.no_grad():
+            audio = self.waveglow.infer(mel_outputs_postnet, sigma=0.666)
+            if self.denoise:
+                audio = self.denoiser(audio, strength=0.01)[:, 0]
+            audio = audio * self.config['max_wav_value']
+            audio = audio.squeeze()
+            audio = audio.cpu().numpy()
+            audio = audio.astype('int16')
+            return audio
+        return audio
 
     def load_model_from_dict(self, checkpoint):
         """ Load the model from the checkpoint by filtering out the unnecessary parameters"""

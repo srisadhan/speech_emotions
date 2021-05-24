@@ -22,10 +22,13 @@ import os
 from sklearn.metrics import confusion_matrix
 from itertools import product
 import json
+from librosa.filters import mel as librosa_mel_fn
 
 # nopep8
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.getcwd())
+from src.datasets.stft import STFT  # nopep8
+
 
 
 warnings.filterwarnings("ignore")
@@ -43,7 +46,7 @@ RUNS_DIR = config['runs_dir']
 SAMPLING_RATE = config['resampling_rate']
 
 N_FFT = config['n_fft']
-H_L = config['hop_length']
+H_L = config['n_fft']
 STEP_SIZE_EM = int((SAMPLING_RATE/16)/H_L)
 MEL_CHANNELS = config['n_mels']
 SMOOTHING_LENGTH = config['smoothing_length']
@@ -56,6 +59,88 @@ dirs_ = set([globals()[d] for d in globals() if d.__contains__('DIR')] +
             [config[d] for d in config if d.__contains__('DIR')])
 
 VAD = webrtcvad.Vad(mode=config['vad_mode'])
+
+
+class LinearNorm(torch.nn.Module):
+    def __init__(self, in_dim, out_dim, bias=True, w_init_gain='linear'):
+        super(LinearNorm, self).__init__()
+        self.linear_layer = torch.nn.Linear(in_dim, out_dim, bias=bias)
+
+        torch.nn.init.xavier_uniform_(
+            self.linear_layer.weight,
+            gain=torch.nn.init.calculate_gain(w_init_gain))
+
+    def forward(self, x):
+        return self.linear_layer(x)
+
+
+class ConvNorm(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1,
+                 padding=None, dilation=1, bias=True, w_init_gain='linear'):
+        super(ConvNorm, self).__init__()
+        if padding is None:
+            assert(kernel_size % 2 == 1)
+            padding = int(dilation * (kernel_size - 1) / 2)
+
+        self.conv = torch.nn.Conv1d(in_channels, out_channels,
+                                    kernel_size=kernel_size, stride=stride,
+                                    padding=padding, dilation=dilation,
+                                    bias=bias)
+
+        torch.nn.init.xavier_uniform_(
+            self.conv.weight, gain=torch.nn.init.calculate_gain(w_init_gain))
+
+    def forward(self, signal):
+        conv_signal = self.conv(signal)
+        return conv_signal
+
+
+class TacotronSTFT(torch.nn.Module):
+    def __init__(self, filter_length=1024, hop_length=256, win_length=1024,
+                 mel_channels=80, sampling_rate=22050, mel_fmin=0.0,
+                 mel_fmax=8000.0):
+        super(TacotronSTFT, self).__init__()
+        self.mel_channels = mel_channels
+        self.sampling_rate = sampling_rate
+        self.stft_fn = STFT(filter_length, hop_length, win_length)
+        mel_basis = librosa_mel_fn(
+            sampling_rate, filter_length, mel_channels, mel_fmin, mel_fmax)
+        mel_basis = torch.from_numpy(mel_basis).float()
+        self.register_buffer('mel_basis', mel_basis)
+
+    def spectral_normalize(self, magnitudes):
+        output = dynamic_range_compression(magnitudes)
+        return output
+
+    def spectral_de_normalize(self, magnitudes):
+        output = dynamic_range_decompression(magnitudes)
+        return output
+
+    def mel_spectrogram(self, y):
+        """Computes mel-spectrograms from a batch of waves
+        PARAMS
+        ------
+        y: Variable(torch.FloatTensor) with shape (B, T) in range [-1, 1]
+
+        RETURNS
+        -------
+        mel_output: torch.FloatTensor of shape (B, mel_channels, T)
+        """
+        # assert(torch.min(y.data) >= -1)
+        # assert(torch.max(y.data) <= 1)
+
+        magnitudes, phases = self.stft_fn.transform(y)
+        magnitudes = magnitudes.data
+        mel_output = torch.matmul(self.mel_basis, magnitudes)
+        mel_output = self.spectral_normalize(mel_output)
+        return mel_output
+
+
+STFT = TacotronSTFT(
+    config['n_fft_tron'],   config['hop_length_tron'],    config['win_length_tron'],
+    config['n_mels_tron'],  SAMPLING_RATE, config['mel_fmin_tron'],
+    config['mel_fmax_tron']
+)
 
 
 def structure(dirs=[]):
@@ -168,21 +253,31 @@ def preprocess_aud(aud_input, sr=44100):
         # exit()
 
 
-def mel_spectogram(aud):
+def mel_spectogram(aud, mel_type='simple'):
     """
-    Create a mel-spectogram of the given audio
+    Summary:
 
     Args:
 
     Returns:
 
     """
-    mel = librosa.feature.melspectrogram(aud,
-                                         sr=SAMPLING_RATE,
-                                         n_fft=N_FFT,
-                                         hop_length=H_L,
-                                         n_mels=MEL_CHANNELS)
-    # mel = np.log(mel + 1e-5)
+    if mel_type == 'simple':
+        mel = librosa.feature.melspectrogram(aud,
+                                             sr=SAMPLING_RATE,
+                                             n_fft=config['n_fft'],
+                                             win_length=N_FFT,
+                                             hop_length=H_L,
+                                             n_mels=mel_channels)
+        if config['use_logMel']:
+            # mel = np.log(mel + 1e-5)
+            mel = librosa.power_to_db(mel)
+    elif mel_type == 'transform':
+        audio_norm = torch.Tensor(aud)
+        audio_norm = audio_norm.unsqueeze(0)
+        audio_norm = torch.autograd.Variable(audio_norm, requires_grad=False)
+        mel = STFT.mel_spectrogram(audio_norm).data.cpu().numpy()
+
     return mel
 
 
@@ -357,6 +452,7 @@ def write_hdf5(out_file, data):
     proc_file.close()
     exit()
 
+
 def gender_from_speaker_id_RAVDESS(config, speaker_id):
     """Obtain the gender from speaker id for RAVDESS dataset
 
@@ -366,29 +462,47 @@ def gender_from_speaker_id_RAVDESS(config, speaker_id):
         dictionary consisting of configurations loaded from config.yml
     speaker_id : nd-array (N samples, )
         numpy array with speaker id's between 01 and 24
-        
+
     Returns
     -------
     gender_id : nd-array (N samples, )
         numpy array representing gender of the speakers, 0 for Male and 1 for Female speakers 
-    
+
     """
-    
-    male_actors   = [ int(entry) for entry in config['male_actors']]
-    female_actors = [ int(entry) for entry in config['female_actors']]
-    
+
+    male_actors = [int(entry) for entry in config['male_actors']]
+    female_actors = [int(entry) for entry in config['female_actors']]
+
     gender_id = []
     for id in speaker_id:
         if id in male_actors:
             gender_id.append(0)
         elif id in female_actors:
             gender_id.append(1)
-    
+
     gender_id = np.array(gender_id, dtype=np.int).reshape(-1, )
     return gender_id
-            
+
+
+def dynamic_range_compression(x, C=1, clip_val=1e-5):
+    """
+    PARAMS
+    ------
+    C: compression factor
+    """
+    return torch.log(torch.clamp(x, min=clip_val) * C)
+
+
+def dynamic_range_decompression(x, C=1):
+    """
+    PARAMS
+    ------
+    C: compression factor used to compress
+    """
+    return torch.exp(x) / C
 
 if __name__ == "__main__":
+    
     structure()
     dataset = HDF5TorchDataset(
         config['train_dir']
