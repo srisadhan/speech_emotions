@@ -12,7 +12,7 @@ import soundfile
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.getcwd())
 
-from src.datasets.data_loaders import HDF5TorchDataset, HDF5TorchDataset2
+from src.datasets.data_loaders import EmotionDataset
 import matplotlib.pyplot as plt
 import librosa
 from src.datasets.create_dataset import preprocess
@@ -72,9 +72,6 @@ class EmotionNet_VAE(nn.Module):
                 model_save_dir, self.__class__.__name__ + '_Epoch_{}.pt')
 
         self.device = device
-
-        self.dataset_train = HDF5TorchDataset(dataset_train, device=device)
-        self.dataset_val = HDF5TorchDataset(dataset_val, device=device)
 
         self.encoder = nn.Sequential(
             nn.Conv1d(self.config['n_mels'], 32, 4, 2, 1),
@@ -243,7 +240,7 @@ class EmotionNet_VAE(nn.Module):
 
         y = librosa.feature.inverse.mel_to_audio(
             spec,
-            sr=self.config['resampling_rate'],
+            sr=self.config['resampled_rate'],
             n_fft=self.config['n_fft'],
             hop_length=self.config['hop_length'],
             win_length=self.config['win_length'])
@@ -251,7 +248,7 @@ class EmotionNet_VAE(nn.Module):
         soundfile.write(os.path.join(self.config['vis_dir'],
                                      '{}.wav'.format(self.epoch)),
                         y,
-                        samplerate=self.config['resampling_rate'])
+                        samplerate=self.config['resampled_rate'])
         return y
 
     def load_model_cpt(self, cpt=0, opt=None, device=torch.device('cuda:0')):
@@ -351,9 +348,6 @@ class EmotionNet_VAE2(nn.Module):
                 model_save_dir, self.__class__.__name__ + '_Epoch_{}.pt')       
 
         self.device = device
-
-        self.dataset_train = HDF5TorchDataset2(self.config['const_MelSpec1'], self.config, device=device)
-        
         
         self.encoder = nn.Sequential(nn.Conv1d(self.config['n_mels'], 64, 4, 2, 1, 1), 
                                      nn.ReLU(True),                           
@@ -513,7 +507,7 @@ class EmotionNet_VAE2(nn.Module):
             spec = spec
             
         y = librosa.feature.inverse.mel_to_audio(spec,
-                                            sr=self.config['resampling_rate'],
+                                            sr=self.config['resampled_rate'],
                                             n_fft=self.config['n_fft'],
                                             hop_length=self.config['hop_length'],
                                             win_length=self.config['win_length'])
@@ -521,7 +515,7 @@ class EmotionNet_VAE2(nn.Module):
         soundfile.write(os.path.join(self.config['vis_dir'],
                                     '{}.wav'.format(self.epoch)),
                                     y,
-                                    samplerate=self.config['resampling_rate'])
+                                    samplerate=self.config['resampled_rate'])
         return y
 
     def load_model_cpt(self, cpt=0, opt=None, device=torch.device('cuda:0')):

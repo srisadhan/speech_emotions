@@ -1,4 +1,10 @@
+import os
+import sys
+#nopep8
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.getcwd())
 import argparse
+from src.resemblyzer.voice_encoder import VoiceEncoder
 from sklearn.metrics import roc_curve
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
@@ -11,14 +17,13 @@ import torch.nn.functional as F
 from math import floor
 from torch.utils.tensorboard import SummaryWriter
 from yaml import safe_load
-import os
-import sys
+
 import soundfile
 
 # from src.data.data_utils import ImbalancedDatasetSampler
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.getcwd())
-from src.datasets.data_utils import H_L, STEP_SIZE_EM, split_audio_ixs, mel_spectogram, preprocess_aud, HDF5TorchDataset  # noqa
+from src.datasets.data_utils import H_L, STEP_SIZE_EM, split_audio_ixs, mel_spectrogram, preprocess_aud, HDF5TorchDataset  # noqa
 np.random.seed(42)
 
 
@@ -213,16 +218,14 @@ class SPEAKER_ENCODER(nn.Module):
                     }, self.model_save_string.format(epoch))
 
     def embed(self, aud, group=True):
-
         aud_splits, mel_splits = split_audio_ixs(len(aud))
         max_aud_length = aud_splits[-1].stop
-
         if max_aud_length >= len(aud):
             aud = np.pad(aud, (0, max_aud_length - len(aud)), "constant")
 
-        mel = mel_spectogram(aud).astype(np.float32).T
+        mel = mel_spectrogram(aud).astype(np.float32).T
         mels = np.array([mel[s] for s in mel_splits])
-
+        print(mels.shape)
         mels = torch.from_numpy(mels).to(self.device)
         embeds_all = []
         with torch.no_grad():
@@ -391,9 +394,39 @@ if __name__ == "__main__":
         sim_matrix = encoder.sim_matrix_infer(fnames, cpt)
     elif args.mode == 'eval':
         aud1, _ = preprocess_aud(os.path.join(
-            encoder.config_yml['vis_dir'], 'speaker1.wav'))
+            encoder.config_yml['vis_dir'], 'speaker_male.wav'))
         aud2, _ = preprocess_aud(os.path.join(
-            encoder.config_yml['vis_dir'], 'speaker33.wav'))
+            encoder.config_yml['vis_dir'], 'speaker_female.wav'))
+        
+        mel1 = mel_spectrogram(aud1, mel_type='simple_40mels')
+        mel2 = mel_spectrogram(aud2, mel_type='simple_40mels')
+        rate = 16000
+        
+        mel1 = librosa.db_to_power(mel1)
+        mel2 = librosa.db_to_power(mel2)
+        
+        aud1 = librosa.feature.inverse.mel_to_audio(mel1,
+                                            sr=rate,
+                                            n_fft=400,
+                                            hop_length=160,
+                                            win_length=400)
+        aud2 = librosa.feature.inverse.mel_to_audio(mel2,
+                                            sr=rate,
+                                            n_fft=400,
+                                            hop_length=160,
+                                            win_length=400)
+
+        
+        # aud1 = librosa.feature.inverse.mel_to_audio(mel1,
+        #                                     sr=rate,
+        #                                     n_fft=1024,
+        #                                     hop_length=256,
+        #                                     win_length=1024)
+        # aud2 = librosa.feature.inverse.mel_to_audio(mel2,
+        #                                     sr=rate,
+        #                                     n_fft=1024,
+        #                                     hop_length=256,
+        #                                     win_length=1024)
         
         soundfile.write(os.path.join(
             encoder.config_yml['vis_dir'], 'aud1.wav'), 
@@ -408,7 +441,12 @@ if __name__ == "__main__":
         embed2, _ = encoder.embed(aud2, group=True)
 
         print(embed1@embed2)
-        print(embed1.shape,embed2.shape)
+        # print(embed1.shape,embed2.shape)
+        
+        encoder = VoiceEncoder()
+        embed1 = encoder.embed_utterance(aud1)
+        embed2 = encoder.embed_utterance(aud2)
+        print(embed1@embed2)
         
         # fig, (ax1, ax2) = plt.subplots(2, 1)
         # fig.suptitle('A tale of 2 subplots')

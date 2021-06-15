@@ -13,3 +13,5 @@
 - Statement 2 data with same actors involved in training
 - Statement 1 and 2 data of two actors (1 Male and 1 Female) not included in training
  
+
+# EmotionNet_AE: 8 mels using STFT along with speaker embeddings perform better than 40 mels w/o speaker embedding and 80 mels with and w/o speaker embeddings

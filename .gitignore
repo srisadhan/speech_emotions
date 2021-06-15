@@ -77,7 +77,7 @@ target/
 
 # exclude data from source control by default
 data/
-runs/
+trained_runs/
 
 trained_models/*
 !trained_models/SPEAKER_ENCODER/
