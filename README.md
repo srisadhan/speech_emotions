@@ -9,7 +9,7 @@ learning representations for emotions in speech
 The speech files have the following information encoded in the filename. The numbers denote the placeholders in the filename separated by '-'.
 - 1) Modality:             (01 = full-AV, 02 = video-only, 03 = audio-only).
 - 2) Vocal channel:        (01 = speech, 02 = song).
-- 3) Emotion:              (01 = neutral, 02 = calm, 03 = happy, 04 = sad, 05 = angry, 06 = fearful, 07 =      disgust, 08 = surprised).
+- 3) Emotion:              (01 = neutral, 02 = calm, 03 = happy, 04 = sad, 05 = angry, 06 = fearful, 07 = disgust, 08 = surprised).
 - 4) Emotional intensity:  (01 = normal, 02 = strong). NOTE: There is no strong intensity for the ‘neutral’ emotion.
 - 5) Statement:            (01 = “Kids are talking by the door”, 02 = “Dogs are sitting by the door”).
 - 6) Repetition:           (01 = 1st repetition, 02 = 2nd repetition).
@@ -45,4 +45,17 @@ Code Resources:
    
 Papers:
 1)[Unsupervised Learning of Disentangled andInterpretable Representations from Sequential Data](http://papers.nips.cc/paper/6784-unsupervised-learning-of-disentangled-and-interpretable-representations-from-sequential-data.pdf)
-1) 
+
+
+# Lessons learnt for Audio and Mels-spectrogram in Librosa and Waveglow
+STFT convert audio to melspectrogram performs better than direct librosa audio to mel. Use STFT with Waveglow for better audio -> mel -> audio conversions
+ - ## Librosa
+   - audio -> melspectrogram -> power_to_db -> Used in our models -> db_to_power -> inverse.mel_to_audio ->audio 
+   - 80 Mels spectrograms have higher frequecy resolution on the spectrogram compared to 40 Mels but the pattern is captured
+- ## Waveglow
+  - Requires 80 mels with n_fft: 1024, hop_length : 256, win_length : 1024
+  - Good audio generation for sampling rate 22050
+  
+# Lessons learnt while using dataloader
+Care must be taken if np.random.randint is used inside the __getitem__() of torch.utils.data.DataLoader or if data is loaded in parallel using num_workers. Please refer to the following document for more information
+[Using PyTorch + NumPy? You're making a mistake.](https://tanelp.github.io/posts/a-bug-that-plagues-thousands-of-open-source-ml-projects/)

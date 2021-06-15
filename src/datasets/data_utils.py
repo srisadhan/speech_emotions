@@ -23,6 +23,7 @@ from sklearn.metrics import confusion_matrix
 from itertools import product
 import json
 from librosa.filters import mel as librosa_mel_fn
+from imblearn.under_sampling import RandomUnderSampler
 
 # nopep8
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -30,23 +31,22 @@ sys.path.append(os.getcwd())
 from src.datasets.stft import STFT  # nopep8
 
 
-
 warnings.filterwarnings("ignore")
 
 with open('src/config.yaml', 'r') as f:
     config = safe_load(f.read())
 
-RAW_DATA_DIR = config['raw_audio_data']
+RAW_DATA_DIR = config['raw_audio_data_RAVDESS']
 PROC_DATA_DIR = config['proc_data_dir']
 INTERIM_DATA_DIR = config['interim_data_dir']
 MODEL_SAVE_DIR = config['model_save_dir']
 VIS_DIR = config['vis_dir']
 RUNS_DIR = config['runs_dir']
 
-SAMPLING_RATE = config['resampling_rate']
+SAMPLING_RATE = config['resampled_rate']
 
 N_FFT = config['n_fft']
-H_L = config['n_fft']
+H_L = config['hop_length']
 STEP_SIZE_EM = int((SAMPLING_RATE/16)/H_L)
 MEL_CHANNELS = config['n_mels']
 SMOOTHING_LENGTH = config['smoothing_length']
@@ -141,7 +141,12 @@ STFT = TacotronSTFT(
     config['n_mels_tron'],  SAMPLING_RATE, config['mel_fmin_tron'],
     config['mel_fmax_tron']
 )
-
+# To work with 40 mels
+# STFT = TacotronSTFT(
+#     config['n_fft'],   config['hop_length'],    config['win_length'],
+#     config['n_mels'],  SAMPLING_RATE, config['mel_fmin_tron'],
+#     config['mel_fmax_tron']
+# )
 
 def structure(dirs=[]):
     """
@@ -204,7 +209,7 @@ def detect_voices(aud, sr=44100):
 
 def preprocess_aud(aud_input, sr=44100):
     """
-    Preprocess and return the provided audio
+    Resample, Preprocess and return the provided audio
 
     Args:
 
@@ -218,9 +223,9 @@ def preprocess_aud(aud_input, sr=44100):
         aud, sr = librosa.load(fname, sr=None)
     if sr != SAMPLING_RATE:
         aud = librosa.resample(aud, sr, SAMPLING_RATE)
+        
     try:
         aud = normalization(aud, norm_type='peak')
-
     except AssertionError as e:
         print(AssertionError("Empty audio sig"))
 
@@ -229,18 +234,11 @@ def preprocess_aud(aud_input, sr=44100):
 
     assert len(aud) % SMOOTHING_WSIZE == 0, print(len(aud) % trim_len, aud)
 
-    # pcm_16 = np.round(
-    #     (np.iinfo(np.int16).max * aud)).astype(np.int16).tobytes()
-    # voices = [
-    #     VAD.is_speech(pcm_16[2 * ix:2 * (ix + SMOOTHING_WSIZE)],
-    #                   sample_rate=SAMPLING_RATE)
-    #     for ix in range(0, len(aud), SMOOTHING_WSIZE)
-    # ]
+    # remove silences from the audio clip
     voices = detect_voices(aud, SAMPLING_RATE)
 
     smoothing_mask = np.repeat(
         binary_dilation(voices, np.ones(SMOOTHING_LENGTH)), SMOOTHING_WSIZE)
-    # print(len(smoothing_mask))
     aud = aud[smoothing_mask]
 
     try:
@@ -253,7 +251,7 @@ def preprocess_aud(aud_input, sr=44100):
         # exit()
 
 
-def mel_spectogram(aud, mel_type='simple'):
+def mel_spectrogram(aud, sr=16000, mel_type='simple_40mels'):
     """
     Summary:
 
@@ -262,23 +260,33 @@ def mel_spectogram(aud, mel_type='simple'):
     Returns:
 
     """
-    if mel_type == 'simple':
+    if mel_type == 'simple_40mels':
         mel = librosa.feature.melspectrogram(aud,
-                                             sr=SAMPLING_RATE,
+                                             sr=sr,
                                              n_fft=config['n_fft'],
-                                             win_length=N_FFT,
-                                             hop_length=H_L,
-                                             n_mels=mel_channels)
+                                             win_length=config['win_length'],
+                                             hop_length=config['hop_length'],
+                                             n_mels=config['n_mels'])
         if config['use_logMel']:
-            # mel = np.log(mel + 1e-5)
             mel = librosa.power_to_db(mel)
+            
+    elif mel_type == 'simple_80mels':
+        mel = librosa.feature.melspectrogram(aud,
+                                             sr=sr,
+                                             n_fft=config['n_fft_tron'],
+                                             win_length=config['win_length_tron'],
+                                             hop_length=config['hop_length_tron'],
+                                             n_mels=config['n_mels_tron'])
+        if config['use_logMel']:
+            mel = librosa.power_to_db(mel)
+            
     elif mel_type == 'transform':
         audio_norm = torch.Tensor(aud)
         audio_norm = audio_norm.unsqueeze(0)
         audio_norm = torch.autograd.Variable(audio_norm, requires_grad=False)
-        mel = STFT.mel_spectrogram(audio_norm).data.cpu().numpy()
+        mel = STFT.mel_spectrogram(audio_norm).squeeze().data.cpu().numpy()
 
-    return mel
+    return mel.astype(np.float32)
 
 
 def split_audio_ixs(n_samples, rate=STEP_SIZE_EM, min_coverage=0.75):
@@ -424,7 +432,7 @@ def load_audio(fname, sample_rate=None):
     """
     aud, sr = librosa.load(fname, sr=None)
     if sample_rate is None:
-        sample_rate = config['SAMPLING_RATE']
+        sample_rate = config['sampling_rate']
     aud, sr = preprocess_aud(aud, sr)
     return aud
 
@@ -500,6 +508,35 @@ def dynamic_range_decompression(x, C=1):
     C: compression factor used to compress
     """
     return torch.exp(x) / C
+
+def fix_length_spectrogram(specgram, mel_seg_length, append_mode='edge'):
+    """Append 
+
+    Parameters
+    ----------
+    specgram : nd-array spectrogram (axis0 - mels, axis1 - time)
+    mel_seg_length : Length to which all the mel-spectrograms to modify 
+    append_mode : if the specgram is shorter than mel_seg_length in axis1 then append using this mode. modes to select from np.pad
+
+    Returns
+    -------
+    fixed length mel-spectrogram
+    """
+    slice_ind = abs(specgram.shape[1] - mel_seg_length) // 2
+                            
+    if specgram.shape[1] < mel_seg_length:
+        specgram = librosa.util.fix_length(specgram, mel_seg_length, axis=1, mode=append_mode)
+    else:
+        specgram = specgram[:, slice_ind:slice_ind + mel_seg_length]
+    
+    return specgram
+
+def return_balanced_data_indices(labels):
+    """ Balance the number of classes based on the label data and return balanced indices 
+    """
+    rus = RandomUnderSampler()
+    rus.fit_resample(labels, labels)
+    return rus.sample_indices_
 
 if __name__ == "__main__":
     

@@ -2,7 +2,7 @@
 # https://github.com/resemble-ai/Resemblyzer/blob/master/resemblyzer/audio.py
 
 from scipy.ndimage.morphology import binary_dilation
-from resemblyzer.hparams import *
+from src.resemblyzer.hparams import *
 from pathlib import Path
 from typing import Optional, Union
 import numpy as np

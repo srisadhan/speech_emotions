@@ -1,179 +1,96 @@
-import scipy as sp
 from torch.optim import optimizer
+from umap.umap_ import UMAP
 import yaml
 import sys
-import wget 
-import zipfile
+
 import collections
 import os 
 
-from utils import skip_run
+#nopep8
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.getcwd())
+
+from src.utils import skip_run
 from pathlib import Path
-from datasets.create_dataset import (download_dataset, extract_using_torchaudio,
-                                    pad_zerosTo_waveforms, club_intensities_as_repetitions,
-                                    extract_MelSpectrogram, constant_shaped_spectrogram, pooled_waveform_dataset)
-from datasets.data_utils import gender_from_speaker_id_RAVDESS
-from datasets.data_loaders import EmotionDataset
-from models.speaker_encoder import SPEAKER_ENCODER
-from models.emotionet_ae import EmotionNet_AE
-from resemblyzer.voice_encoder import VoiceEncoder
+from src.datasets.create_dataset import (download_RAVDESS_dataset, load_audio_RAVDESS,
+                                    extract_melSpectrogram_RAVDESS, fix_length_melspectrogram_RAVDESS, 
+                                    pooled_waveform_dataset_RAVDESS, pool_melspectrogram_RAVDESS)
+from src.datasets.data_utils import gender_from_speaker_id_RAVDESS
+from src.datasets.data_loaders import EmotionDataset, EmotionEncoderDataset
+from src.models.speaker_encoder import SPEAKER_ENCODER
+from src.models.emotionet_ae import EmotionNet_AE
+from src.models.emotion_encoder import EmotionEncoder_CONV, EmotionEncoder_LSTM
+from src.resemblyzer.voice_encoder import VoiceEncoder
 import torch 
 import torch.optim as optim
 
 import matplotlib.pyplot as plt 
 import deepdish as dd
 import argparse
-from torch.utils.tensorboard import SummaryWriter
 import librosa
 import soundfile
 import numpy as np
 import umap 
-
+from scipy.io.wavfile import write
+from src.resemblyzer import audio
+import librosa
+from tqdm import tqdm
 
 # The configuration file
 config = yaml.load(open('src/config.yaml'), Loader=yaml.SafeLoader)
 
 # Create the required folders
-filepath = str(Path(__file__).parents[1] / 'data')
-if not os.path.isdir(filepath):
-    os.mkdir(filepath)
-
-filepath = str(Path(__file__).parents[1] / 'data/raw')
-if not os.path.isdir(filepath):
-    os.mkdir(filepath)
-
-filepath = str(Path(__file__).parents[1] / 'data/interim')
-if not os.path.isdir(filepath):
-    os.mkdir(filepath)
-
-filepath = str(Path(__file__).parents[1] / 'data/processed')
-if not os.path.isdir(filepath):
-    os.mkdir(filepath)
+os.makedirs(str(Path(__file__).parents[1] / 'data'), exist_ok=True)
+os.makedirs(str(Path(__file__).parents[1] / 'data/raw'), exist_ok=True)
+os.makedirs(str(Path(__file__).parents[1] / 'data/interim'), exist_ok=True)
+os.makedirs(str(Path(__file__).parents[1] / 'data/processed'), exist_ok=True)
 
 ######################################################
 ## RAVDESS dataset
 ######################################################
 # download data from web and place it in the desired location
 with skip_run('skip', 'download_RAVDESS_data') as check, check():
-    url = config['url']
-    download_dataset(url, config)
+    url = config['RAVDESS_url']
+    download_RAVDESS_dataset(url, config)
 
+# import the data from .wav files and create a dictionary
+with skip_run('skip', 'import audio files') as check, check():
+    save_path = Path(__file__).parents[1] / config['RAVDESS_waveform']
+    load_audio_RAVDESS(config, save_path)
 
-run_str = 'skip'
-# Process the data and save the data in a dictionary format into the h5 file
-with skip_run(run_str, 'Data_processing') as check, check():
-    # import the data from .wav files and create a dictionary
-    with skip_run(run_str, 'import_audio_files') as check, check():
-        extract_using_torchaudio(config)
+with skip_run('skip', 'extract MelSpec and save') as check, check():
+    save_path = Path(__file__).parents[1] / config['RAVDESS_simple_40melspec']
+    extract_melSpectrogram_RAVDESS(config, save_path, mel_type='simple_40mels')
     
-    with skip_run(run_str, 'extract_MelSpec_and_save') as check, check():
-        extract_MelSpectrogram(config, intensity_flag=True, zero_pad_flag=False)
-        # extract_MelSpectrogram(config, intensity_flag=True, zero_pad_flag=True)
+    # save_path = Path(__file__).parents[1] / config['RAVDESS_simple_80melspec']
+    # extract_melSpectrogram_RAVDESS(config, save_path, mel_type='simple_80mels')
     
-    with skip_run(run_str, 'segment_speech_to_constant_length_MelSpec') as check, check():
-        # load the previously extracted Mel Spectrograms
-        data = dd.io.load((Path(__file__).parents[1] / config['speech1_MelSpec']))
-        features, labels, speaker_id = constant_shaped_spectrogram(data, config, actors=config['train_actors'])
-        Data = collections.defaultdict()
-        Data['features'] = features
-        Data['labels']   = labels
-        Data['speaker_id'] = speaker_id
-        dd.io.save(str(Path(__file__).parents[1] / config['const_MelSpec1']), Data)
+    # save_path = Path(__file__).parents[1] / config['RAVDESS_transform_80melspec']
+    # extract_melSpectrogram_RAVDESS(config, save_path, mel_type='transform')
 
-        # load the previously extracted Mel Spectrograms
-        data = dd.io.load((Path(__file__).parents[1] / config['speech2_MelSpec']))
-        features, labels, speaker_id = constant_shaped_spectrogram(data, config, actors=config['train_actors'])
-        Data = collections.defaultdict()
-        Data['features'] = features
-        Data['labels']   = labels
-        Data['speaker_id'] = speaker_id
-        dd.io.save(str(Path(__file__).parents[1] / config['const_MelSpec2']), Data)
-        
-    with skip_run(run_str, 'Pool the waveforms and save the dataset') as check, check():
-        # load the waveform data
-        data = dd.io.load(Path(__file__).parents[1] / config['speech1_data_raw'])
-        features, labels, speaker_id = pooled_waveform_dataset(data, config, actors=config['train_actors'])
-        Data = collections.defaultdict()
-        Data['features'] = features
-        Data['labels']   = labels
-        Data['speaker_id'] = speaker_id
-        dd.io.save(str(Path(__file__).parents[1] / config['pooled_waveforms1']), Data)
-        
-        data = dd.io.load(Path(__file__).parents[1] / config['speech2_data_raw'])
-        features, labels, speaker_id = pooled_waveform_dataset(data, config, actors=config['train_actors'])
-        Data = collections.defaultdict()
-        Data['features'] = features
-        Data['labels']   = labels
-        Data['speaker_id'] = speaker_id
-        dd.io.save(str(Path(__file__).parents[1] / config['pooled_waveforms2']), Data)
+with skip_run('skip', 'Make fix length mel spectrograms') as check, check():
+    # ---------------fix length spectrograms for 40 mels 
+    data = dd.io.load((Path(__file__).parents[1] / config['RAVDESS_simple_40melspec']))
+    Data = pool_melspectrogram_RAVDESS(data, config, actors=config['train_actors'])
+    dd.io.save(str(Path(__file__).parents[1] / config['const_40mel_simple']), Data)          
+
+    # ---------------fix length spectrograms for 80 mels 
+    # data = dd.io.load((Path(__file__).parents[1] / config['RAVDESS_simple_80melspec']))
+    # Data = pool_melspectrogram_RAVDESS(data, config, actors=config['train_actors'])
+    # dd.io.save(str(Path(__file__).parents[1] / config['const_80mel_simple']), Data) 
     
-    # make the testing data using the left out speakers 
-    with skip_run(run_str, 'Prepare the test data') as check, check():
-            
-        # Statement 1 and 2 melspectrograms
-        data = dd.io.load((Path(__file__).parents[1] / config['speech1_MelSpec']))
-        features, labels, speaker_id = constant_shaped_spectrogram(data, config, actors=config['test_actors'])
-        Data = collections.defaultdict()
-        Data['features'] = features
-        Data['labels']   = labels
-        Data['speaker_id'] = speaker_id
-        dd.io.save(str(Path(__file__).parents[1] / config['const_test_MelSpec1']), Data)
-
-        data = dd.io.load((Path(__file__).parents[1] / config['speech2_MelSpec']))
-        features, labels, speaker_id = constant_shaped_spectrogram(data, config, actors=config['test_actors'])
-        Data = collections.defaultdict()
-        Data['features'] = features
-        Data['labels']   = labels
-        Data['speaker_id'] = speaker_id
-        dd.io.save(str(Path(__file__).parents[1] / config['const_test_MelSpec2']), Data)
-        
-        # Statement 1 and 2 waveforms 
-        reducer = umap.UMAP()
-        encoder = VoiceEncoder()
-                
-        data = dd.io.load(Path(__file__).parents[1] / config['speech1_data_raw'])
-        features, labels, speaker_id = pooled_waveform_dataset(data, config, actors=config['test_actors'])
-        Data = collections.defaultdict()
-                
-        speaker_embedding = []    
-        for i in range(len(features)):
-            embeds = encoder.embed_utterance(features[i])
-            speaker_embedding.append(embeds.reshape(1, -1))
-        
-        speaker_embedding = np.concatenate(speaker_embedding, axis=0)
-        manifold_embedding = reducer.fit_transform(speaker_embedding)
-        
-        Data = {'speaker_embeds': speaker_embedding,
-                'manifold_embeds': manifold_embedding,
-                'speaker_id': speaker_id}
-        dd.io.save(str(Path(__file__).parents[1] / config['umap_resemblyzer_test1']), Data)
-
+    # # ---------------fix length spectrograms for 80 mel STFT 
+    # data = dd.io.load((Path(__file__).parents[1] / config['RAVDESS_transform_80melspec']))
+    # Data = pool_melspectrogram_RAVDESS(data, config, actors=config['train_actors'])
+    # dd.io.save(str(Path(__file__).parents[1] / config['const_80mel_transform']), Data) 
     
-        data = dd.io.load(Path(__file__).parents[1] / config['speech2_data_raw'])
-        features, labels, speaker_id = pooled_waveform_dataset(data, config, actors=config['test_actors'])
-        
-        speaker_embedding = []    
-        for i in range(len(features)):
-            embeds = encoder.embed_utterance(features[i])
-            speaker_embedding.append(embeds.reshape(1, -1))
-        
-        speaker_embedding = np.concatenate(speaker_embedding, axis=0)
-        manifold_embedding = reducer.fit_transform(speaker_embedding)
-        
-        Data = {'speaker_embeds': speaker_embedding,
-                'manifold_embeds': manifold_embedding,
-                'speaker_id': speaker_id}
-        dd.io.save(str(Path(__file__).parents[1] / config['umap_resemblyzer_test2']), Data)
-    #--------------------------------------------------------------------------------------#          
-               
-
 ######################################################
 ## Speaker Encoder - Chaitanya's trained model
 ###################################################### 
 with skip_run('skip', 'Project the Speaker Embeddings to a Manifold') as check, check():
-    data = dd.io.load(str(Path(__file__).parents[1] / config['pooled_waveforms1']))
+    data = dd.io.load(Path(__file__).parents[1] / config['RAVDESS_waveform'])
+    data = pooled_waveform_dataset_RAVDESS(data, config, actors=config['train_actors'], statements=['01'])
 
-    speaker_id = data['speaker_id']
     reducer = umap.UMAP()
     
     model = SPEAKER_ENCODER(load_model=True,
@@ -194,17 +111,7 @@ with skip_run('skip', 'Project the Speaker Embeddings to a Manifold') as check, 
     speaker_embedding = np.concatenate(speaker_embedding, axis=0)
     manifold_embedding = reducer.fit_transform(speaker_embedding)
     
-    Data = {'speaker_embeds': speaker_embedding,
-            'umap_embeds' : manifold_embedding,
-            'speaker_id': speaker_id}
-    dd.io.save(str(Path(__file__).parents[1] / config['umap_speaker_embeddings']), Data)
-
-with skip_run('skip', 'Plot the UMAP embeddings')as check, check():
-    data = dd.io.load(str(Path(__file__).parents[1] / config['umap_speaker_embeddings']))
-    speaker_id = data['speaker_id'].detach().numpy()
-    manifold_embedding = data['umap_embeds']
-    
-    gender_id = gender_from_speaker_id_RAVDESS(config, speaker_id)
+    gender_id = gender_from_speaker_id_RAVDESS(config, data['speaker_id'])
     
     female_ind = np.multiply(np.arange(0, gender_id.shape[0]), gender_id.tolist())
     male_ind   = np.multiply(np.arange(0, gender_id.shape[0]), np.subtract(np.ones(gender_id.shape, dtype=np.int), gender_id, dtype=np.int).tolist())
@@ -215,16 +122,15 @@ with skip_run('skip', 'Plot the UMAP embeddings')as check, check():
     plt.title('Male and Female Speaker embeddings on the UMAP manifold')
     
     plt.figure()
-    plt.scatter(manifold_embedding[male_ind, 0], manifold_embedding[male_ind, 1], c=speaker_id[male_ind], cmap='viridis')
+    plt.scatter(manifold_embedding[male_ind, 0], manifold_embedding[male_ind, 1], c=data['speaker_id'][male_ind], cmap='viridis')
     plt.colorbar()
     plt.title('Male Speaker embeddings on the UMAP manifold')
     
     plt.figure()
-    plt.scatter(manifold_embedding[female_ind, 0], manifold_embedding[female_ind, 1], c=speaker_id[female_ind], cmap='viridis')
+    plt.scatter(manifold_embedding[female_ind, 0], manifold_embedding[female_ind, 1], c=data['speaker_id'][female_ind], cmap='viridis')
     plt.colorbar()
     plt.title('Female Speaker embeddings on the UMAP manifold')
     
-    plt.show()
     
 ######################################################
 ## Voice Encoder - from Resemblyzer project
@@ -232,47 +138,17 @@ with skip_run('skip', 'Plot the UMAP embeddings')as check, check():
 with skip_run('skip', 'Project the Voice Embeddings to a Manifold') as check, check():
     reducer = umap.UMAP()
     encoder = VoiceEncoder()
-    
-    # For statement 1
-    data = dd.io.load(str(Path(__file__).parents[1] / config['pooled_waveforms1']))
-    speaker_id = data['speaker_id']
-    speaker_embedding = []    
-    for i in range(len(data['features'])):
-        embeds = encoder.embed_utterance(data['features'][i])
-        speaker_embedding.append(embeds.reshape(1, -1))
-    
-    speaker_embedding = np.concatenate(speaker_embedding, axis=0)
-    manifold_embedding = reducer.fit_transform(speaker_embedding)
-    
-    Data = {'speaker_embeds': speaker_embedding,
-            'manifold_embeds': manifold_embedding,
-            'speaker_id': speaker_id}
-    dd.io.save(str(Path(__file__).parents[1] / config['umap_resemblyzer_embeds1']), Data)
-    
-    
-    # For statement 2
-    data = dd.io.load(str(Path(__file__).parents[1] / config['pooled_waveforms1']))
-    speaker_id = data['speaker_id']
-    speaker_embedding = []    
-    for i in range(len(data['features'])):
-        embeds = encoder.embed_utterance(data['features'][i])
-        speaker_embedding.append(embeds.reshape(1, -1))
-    
-    speaker_embedding = np.concatenate(speaker_embedding, axis=0)
-    manifold_embedding = reducer.fit_transform(speaker_embedding)
-    
-    Data = {'speaker_embeds': speaker_embedding,
-            'manifold_embeds': manifold_embedding,
-            'speaker_id': speaker_id}
-    dd.io.save(str(Path(__file__).parents[1] / config['umap_resemblyzer_embeds2']), Data)
 
-with skip_run('skip', 'Plot the UMAP embeddings')as check, check():
-    data = dd.io.load(str(Path(__file__).parents[1] / config['umap_resemblyzer_embeds1']))
-    speaker_id = data['speaker_id'].detach().numpy()
-    manifold_embedding = data['speaker_embeds']
-    
+    filename = 'RAVDESS_simple_40melspec'
+    data = dd.io.load((Path(__file__).parents[1] / config[filename]))
+    Data = pool_melspectrogram_RAVDESS(data, config, actors=config['train_actors'])
+
+    speaker_embedding = Data['speaker_embeds'].reshape(-1, 256)
+    manifold_embedding = reducer.fit_transform(speaker_embedding)
+    speaker_id = Data['speaker_id']
+
+
     gender_id = gender_from_speaker_id_RAVDESS(config, speaker_id)
-    
     female_ind = np.multiply(np.arange(0, gender_id.shape[0]), gender_id.tolist())
     male_ind   = np.multiply(np.arange(0, gender_id.shape[0]), np.subtract(np.ones(gender_id.shape, dtype=np.int), gender_id, dtype=np.int).tolist())
 
@@ -280,77 +156,360 @@ with skip_run('skip', 'Plot the UMAP embeddings')as check, check():
     plt.scatter(manifold_embedding[:, 0], manifold_embedding[:, 1], c=gender_id, cmap='viridis')
     plt.colorbar()
     plt.title('Male and Female Speaker embeddings on the UMAP manifold')
-    
+    plt.savefig('Male_Female_embeds.png')
+
     plt.figure()
     plt.scatter(manifold_embedding[male_ind, 0], manifold_embedding[male_ind, 1], c=speaker_id[male_ind], cmap='viridis')
     plt.colorbar()
     plt.title('Male Speaker embeddings on the UMAP manifold')
-    
+    plt.savefig('Male_embeds.png')
+
     plt.figure()
     plt.scatter(manifold_embedding[female_ind, 0], manifold_embedding[female_ind, 1], c=speaker_id[female_ind], cmap='viridis')
     plt.colorbar()
     plt.title('Female Speaker embeddings on the UMAP manifold')
-    
-    plt.show()
+    plt.savefig('Female_embeds.png')
     
 ######################################################
 ## Train EmotionNet
 ###################################################### 
+with skip_run('skip', 'Train the Emotion autoencoder with specified mel spec') as check, check():
+    # Exploratory study of using different mels with and w/o speaker embeddings
+    N_MELS = [80, 80, 40, 40]
+    MEL_TYPE = ['transform', 'transform', 'simple', 'simple']
+    SPEAKER_EMBED = [False, True, False, True]
+        
+    for i in range(len(N_MELS)):        
+        # please provide the number of mels to be used 
+        n_mels = N_MELS[i]
+        mel_type = MEL_TYPE[i]
+        use_speaker_embeds = SPEAKER_EMBED[i]
+        
+        print('Train the model with Mels: {}, Type: {}, Speaker embed used:{}'.format(n_mels, mel_type, use_speaker_embeds))
+    
+        filename = 'RAVDESS_' + mel_type + '_' + str(n_mels) + 'melspec'
+        data = dd.io.load((Path(__file__).parents[1] / config[filename]))
+        
+        Data = fix_length_melspectrogram_RAVDESS(data, config, actors=config['train_actors'])
+        
+        dataset = EmotionDataset(Data)
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=config['batch_size'], shuffle=True)
+        
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+                
+        model = EmotionNet_AE(n_mels=n_mels, device=device, use_speaker_embeds=use_speaker_embeds)
+        model.to(device)
+        
+        optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-3)
+        # scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
+        scheduler = None
+        
+        model.train_model(dataloader, optimizer, device, lr_scheduler=scheduler)
+        
+        test_data = fix_length_melspectrogram_RAVDESS(data, config, actors=config['test_actors'])
+        
+        test_dataset = EmotionDataset(test_data)
+        test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=config['batch_size'], shuffle=False)
+        model.validate_model(test_dataloader)
+    
+with skip_run('skip', 'Train the EmotionEncoder convolution model') as check, check():
+    N_MELS = [40, 40] #, 80, 80]
+    MEL_TYPE = ['simple', 'simple']#, 'transform', 'transform']
+    SPEAKER_EMBED = [False, True]#, False, True]
+    utterances_per_emotion = 8
+    emotions_per_batch = 14
 
-with skip_run('run', 'Train the Emotion autoencoder') as check, check():
-    datapath = str(Path(__file__).parents[1] / config['const_MelSpec1'])
-    embeds_path = str(Path(__file__).parents[1] / config['umap_speaker_embeddings'])
+    for i in range(len(N_MELS)):        
+        # please provide the number of mels to be used 
+        n_mels = N_MELS[i]
+        mel_type = MEL_TYPE[i]
+        use_speaker_embeds = SPEAKER_EMBED[i]
+        
+        print('Train the model with Mels: {}, Type: {}, Speaker embed used:{}'.format(n_mels, mel_type, use_speaker_embeds))
     
-    dataset = EmotionDataset(datapath, embeds_path)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=config['batch_size'], shuffle=True)
-    
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    print('Train the model on: {}'.format(device))
-    
-    model = EmotionNet_AE(device=device)
-    model.to(device)
-    
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-3)
-    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
-    # scheduler = None
-    
-    model.train_model(dataloader, optimizer, device, lr_scheduler=scheduler, separate_speaker=True)
-    
+        filename = 'RAVDESS_' + mel_type + '_' + str(n_mels) + 'melspec'
+        data = dd.io.load((Path(__file__).parents[1] / config[filename]))
+        
+        Data = fix_length_melspectrogram_RAVDESS(data, config, actors=config['train_actors'])
 
-with skip_run('run', "UMAP emotion embeddings with trained model") as check, check():
-    
-    # Initialize the model    
+        train_dataset = EmotionEncoderDataset(Data, emotions_per_batch=emotions_per_batch, mode='train')
+        train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=utterances_per_emotion, shuffle=False)
+        
+        Data = fix_length_melspectrogram_RAVDESS(data, config, actors=config['valid_actors'])
+        valid_dataset = EmotionEncoderDataset(Data, emotions_per_batch=emotions_per_batch, mode='train')
+        valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size=utterances_per_emotion, shuffle=False)
+
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+                
+        model = EmotionEncoder_CONV(n_mels=n_mels, device=device, use_speaker_embeds=use_speaker_embeds)
+        model.to(device)
+        
+        optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-3)
+        # scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
+        scheduler = None
+        
+        model.train_model(train_dataloader,
+                   valid_dataloader,
+                   emotions_per_batch=emotions_per_batch, 
+                   optimizer=optimizer,
+                   device=device,
+                   lr_scheduler=scheduler)
+        
+        test_data = fix_length_melspectrogram_RAVDESS(data, config, actors=config['test_actors'])
+        
+        test_dataset = EmotionEncoderDataset(test_data, emotions_per_batch=emotions_per_batch, mode='train')
+        test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=config['batch_size'], shuffle=False)
+        model.validate_model(test_dataloader)
+
+with skip_run('skip', 'Train the EmotionEncoder LSTM model') as check, check():        
+    N_MELS = [40, 40] #, 80, 80]
+    MEL_TYPE = ['simple', 'simple']#, 'transform', 'transform']
+    SPEAKER_EMBED = [False, True]#, False, True]
+    utterances_per_emotion = 8
+    emotions_per_batch = 8
+    labels_merge=True
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    print('Train the model on: {}'.format(device))
     
-    model = EmotionNet_AE(device=device)
-    model.to(device)
+    for i in range(len(N_MELS)):        
+        # please provide the number of mels to be used 
+        n_mels = N_MELS[i]
+        mel_type = MEL_TYPE[i]
+        use_speaker_embeds = SPEAKER_EMBED[i]
+        
+        print('Train the model with Mels: {}, Type: {}, Speaker embed used:{}'.format(n_mels, mel_type, use_speaker_embeds))
     
-    checkpoint = torch.load(str(Path(__file__).parents[1] / 'trained_models/EmotionNet_AE/run_with_speaker/EmotionNet_AE_Epoch_7984.pt'))
+        filename = 'RAVDESS_' + mel_type + '_' + str(n_mels) + 'melspec'
+        data = dd.io.load((Path(__file__).parents[1] / config[filename]))
+        
+        Data = pool_melspectrogram_RAVDESS(data, config, actors=config['train_actors'], labels_merge=labels_merge)
+        train_dataset = EmotionEncoderDataset(Data, emotions_per_batch=emotions_per_batch, utterances_per_emotion=utterances_per_emotion, mode='train')
+        train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
+        
+        Data = pool_melspectrogram_RAVDESS(data, config, actors=config['valid_actors'], labels_merge=labels_merge)
+        valid_dataset = EmotionEncoderDataset(Data, emotions_per_batch=emotions_per_batch, utterances_per_emotion=utterances_per_emotion, mode='train')
+        valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size=1, shuffle=False)
+                
+        model = EmotionEncoder_LSTM(n_mels=n_mels, device=device, use_speaker_embeds=use_speaker_embeds)
+        model.to(device)
+        
+        optimizer = optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-3)
+        # scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
+        scheduler = None
+        
+        model.train_model(train_dataloader,
+                   valid_dataloader,
+                   emotions_per_batch=emotions_per_batch, 
+                   optimizer=optimizer,
+                   device=device,
+                   lr_scheduler=scheduler)
+        
+        test_data = pool_melspectrogram_RAVDESS(data, config, actors=config['test_actors'], labels_merge=labels_merge) 
+        test_dataset = EmotionEncoderDataset(test_data, emotions_per_batch=emotions_per_batch, utterances_per_emotion=utterances_per_emotion, mode='train')
+        test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
+        model.validate_model(test_dataloader)
+
+with skip_run('run', 'Validate the EmotionEncoder LSTM model') as check, check():        
+    N_MELS = [40, 40] #, 80, 80]
+    MEL_TYPE = ['simple', 'simple']#, 'transform', 'transform']
+    SPEAKER_EMBED = [True, False]#, False, True]
+    LABELS_MERGE = [False, True]    
+    
+    for labels_merge in LABELS_MERGE:
+        if labels_merge:
+            n_emotions = 8
+        else:
+            n_emotions = 14
+            
+        data = dd.io.load(Path(__file__).parents[1] / config['RAVDESS_waveform'])   
+        wav_data = pooled_waveform_dataset_RAVDESS(data, config, labels_merge=labels_merge, actors=config['train_actors'])
+        
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        for i in range(len(N_MELS)):        
+            # please provide the number of mels to be used 
+            n_mels = N_MELS[i]
+            mel_type = MEL_TYPE[i]
+            use_speaker_embeds = SPEAKER_EMBED[i]
+            
+            print('Validate the model with Mels: {}, Type: {}, Speaker embed used:{}'.format(n_mels, mel_type, use_speaker_embeds))
+        
+            folder_name = 'mel_' + str(n_mels) + '_spk_' + str(use_speaker_embeds) + '_emo_' + str(n_emotions)
+            file_path = Path(__file__).parents[1] / config['model_save_dir'] / 'EmotionEncoder_LSTM' / folder_name
+            
+            # for file in file_path.iterdir():
+            #     name_split = file.name.split('_')
+            #     epoch = str(name_split[-1].split('.')[0])
+            #     print(epoch)
+                
+            file_name = 'EmotionEncoder_LSTM_Epoch_5000.pt'
+            checkpoint = torch.load(os.path.join(config['model_save_dir'], 'EmotionEncoder_LSTM', folder_name, file_name))
+            
+            model = EmotionEncoder_LSTM(n_mels=n_mels, device=device, use_speaker_embeds=use_speaker_embeds)
+            model.load_model_from_dict(checkpoint)
+            model.to(device)
+            
+            emotion_embeds, emotion_labels = [], []
+            for i, wav in tqdm(enumerate(wav_data['features'])):
+                emotion_embeds.append(model.embed_emotion(wav).reshape(1, -1))
+                emotion_labels.append(wav_data['labels'][i])
+
+            emotion_embeds = np.concatenate(emotion_embeds, axis=0)
+            
+            reducer = umap.UMAP()
+            umap_embeds = reducer.fit_transform(emotion_embeds)
+            
+            plt.figure()
+            plt.scatter(umap_embeds[:, 0], umap_embeds[:, 1], c=emotion_labels, cmap='viridis')
+            plt.colorbar()
+            plt.title('Speaker: ' + str(use_speaker_embeds) + ' Labels: ' + str(n_emotions))
+            plt.savefig('Speaker_' + str(use_speaker_embeds) + '_Labels_' + str(n_emotions) + '.png')
+            # filename = 'RAVDESS_' + mel_type + '_' + str(n_mels) + 'melspec'
+            # data = dd.io.load((Path(__file__).parents[1] / config[filename]))
+            
+            # Data = pool_melspectrogram_RAVDESS(data, config, actors=config['train_actors'], labels_merge=labels_merge)
+            # train_dataset = EmotionEncoderDataset(Data, emotions_per_batch=emotions_per_batch, utterances_per_emotion=utterances_per_emotion, mode='train')
+            # train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True)
+            # model.validate_model(train_dataloader)
+            
+            # Data = pool_melspectrogram_RAVDESS(data, config, actors=config['valid_actors'], labels_merge=labels_merge)
+            # valid_dataset = EmotionEncoderDataset(Data, emotions_per_batch=emotions_per_batch, utterances_per_emotion=utterances_per_emotion, mode='train')
+            # valid_dataloader = torch.utils.data.DataLoader(valid_dataset, batch_size=1, shuffle=False)
+            # model.validate_model(valid_dataloader)
+            
+            # test_data = pool_melspectrogram_RAVDESS(data, config, actors=config['test_actors'], labels_merge=labels_merge)
+            # test_dataset = EmotionEncoderDataset(test_data, emotions_per_batch=emotions_per_batch, utterances_per_emotion=utterances_per_emotion, mode='train')
+            # test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
+            # model.validate_model(test_dataloader)
+
+######################################################
+## TACOTRON
+###################################################### 
+with skip_run('skip', 'test pytorch TACOTRON and WAVEGLOW models') as check, check():
+    # load tacotron2
+    tacotron2 = torch.hub.load('nvidia/DeepLearningExamples:torchhub', 'nvidia_tacotron2')
+    tacotron2.to('cuda')
+    tacotron2.eval()
+    
+    # load waveglow
+    waveglow = torch.hub.load('nvidia/DeepLearningExamples:torchhub', 'nvidia_waveglow')
+    waveglow = waveglow.remove_weightnorm(waveglow)
+    waveglow.to('cuda')
+    waveglow.eval()
+    
+    text = "Kids are talking by the door"
+    sequence = np.array(tacotron2.text_to_sequence(text, ['english_cleaners']))[None, :]
+    sequence = torch.from_numpy(sequence).to(device='cuda', dtype=torch.int64)
+    
+    # run the models
+    with torch.no_grad():
+        _, mel, _, _ = tacotron2.infer(sequence)
+        audio = waveglow.infer(mel)
+    audio_numpy = audio[0].data.cpu().numpy()
+    rate = 22050
+    plt.plot(audio_numpy)
+    
+    write("audio.wav",  rate, audio_numpy)
+
+with skip_run('skip', 'test WAVEGLOW model with simple and transform log-mels') as check, check():
+    tacotron2 = torch.hub.load('nvidia/DeepLearningExamples:torchhub', 'nvidia_tacotron2')
+    tacotron2.to('cuda')
+    tacotron2.eval()   
+    text = "Kids are talking by the door"
+    sequence = np.array(tacotron2.text_to_sequence(text, ['english_cleaners']))[None, :]
+    sequence = torch.from_numpy(sequence).to(device='cuda', dtype=torch.int64)
+    
+    # run the models
+    with torch.no_grad():
+        _, mel, _, _ = tacotron2.infer(sequence)
+                                      
+    simple_40logmel_path = Path(__file__).parents[1] / config['RAVDESS_simple_40melspec']
+    simple_80logmel_path = Path(__file__).parents[1] / config['RAVDESS_simple_80melspec']
+    transform_logmel_path = Path(__file__).parents[1] / config['RAVDESS_transform_80melspec']
+    
+    data_simple_40 = dd.io.load(simple_40logmel_path)
+    data_simple_80 = dd.io.load(simple_80logmel_path)
+    data_transform = dd.io.load(transform_logmel_path)
+
+    mel1 = data_simple_40['Actor_06']['statement_01']['emotion_08']['repete_4']
+    mel2 = data_simple_80['Actor_06']['statement_01']['emotion_08']['repete_4']
+    mel3 = data_transform['Actor_06']['statement_01']['emotion_08']['repete_4']
     
     
-    # Test with speech 1 left out actors data
-    datapath = str(Path(__file__).parents[1] / config['const_test_MelSpec1'])
-    embeds_path = str(Path(__file__).parents[1] / config['umap_resemblyzer_test1'])
-    dataset = EmotionDataset(datapath, embeds_path)
+    plt.figure()
+    librosa.display.specshow(mel.squeeze().cpu().numpy())
+    plt.colorbar()
+    plt.figure()
+    librosa.display.specshow(mel1)
+    plt.colorbar()
+    plt.figure()
+    librosa.display.specshow(mel2)
+    plt.colorbar()
+    plt.figure()
+    librosa.display.specshow(mel3)
+    plt.colorbar()
+    plt.savefig('temp.png')
+
+        
+    # load waveglow
+    waveglow = torch.hub.load('nvidia/DeepLearningExamples:torchhub', 'nvidia_waveglow')
+    waveglow = waveglow.remove_weightnorm(waveglow)
+    waveglow.to('cuda')
+    waveglow.eval()
     
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=config['batch_size'], shuffle=True)
-    model.validate_model(dataloader, checkpoint=checkpoint)
+    waveglow_rate = 22050
+    librosa_rate  = 16000
     
-    # Test with speech 2 left out actors data
-    datapath = str(Path(__file__).parents[1] / config['const_test_MelSpec2'])
-    embeds_path = str(Path(__file__).parents[1] / config['umap_resemblyzer_test2'])
-    dataset = EmotionDataset(datapath, embeds_path)
+    # ----------- TACOTRON 80 Mels
+    # run the models
+    with torch.no_grad():
+        audio = waveglow.infer(torch.tensor(mel3.reshape(1, 80, -1), dtype=torch.float32).to('cuda'))
+    audio_numpy = audio[0].data.cpu().numpy()
+    soundfile.write("audio_torch_transform.wav", audio_numpy, waveglow_rate)
     
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=config['batch_size'], shuffle=True)
-    model.validate_model(dataloader, checkpoint=checkpoint)
+    mel3 = librosa.db_to_power(mel3)
+    y = librosa.feature.inverse.mel_to_audio(mel3,
+                                            sr=librosa_rate,
+                                            n_fft=1024,
+                                            hop_length=256,
+                                            win_length=1024)
+
+    soundfile.write("audio_librosa_transform.wav", y, librosa_rate)
     
     
-    # Test with speech 2 all the actors data 
-    datapath = str(Path(__file__).parents[1] / config['const_MelSpec2'])
-    embeds_path = str(Path(__file__).parents[1] / config['umap_resemblyzer_embeds2'])
-    dataset = EmotionDataset(datapath, embeds_path)
+    # ----------- 40 Mels
+    mel1 = librosa.db_to_power(mel1)
+    y = librosa.feature.inverse.mel_to_audio(mel1,
+                                            sr=librosa_rate,
+                                            n_fft=400,
+                                            hop_length=160,
+                                            win_length=400)
     
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=config['batch_size'], shuffle=True)
-    model.validate_model(dataloader, checkpoint=checkpoint)
-    plt.show()
+    soundfile.write("audio_librosa_simple_40.wav", y, librosa_rate)
+    
+    # ----------- 80 Mels
+    # run the models
+    with torch.no_grad():
+        audio = waveglow.infer(torch.tensor(mel2.reshape(1, 80, -1), dtype=torch.float32).to('cuda'))
+    audio_numpy = audio[0].data.cpu().numpy()
+
+    soundfile.write("audio_torch_simple_80.wav", audio_numpy, waveglow_rate)
+    
+    mel2 = librosa.db_to_power(mel2)
+    y = librosa.feature.inverse.mel_to_audio(mel2,
+                                            sr=librosa_rate,
+                                            n_fft=1024,
+                                            hop_length=256,
+                                            win_length=1024)
+    soundfile.write("audio_librosa_simple_80.wav", y, librosa_rate)
+    # NVIDIA's waveglow
+    # waveglow_nvidia = torch.load(config['waveglow_model'], map_location=torch.device('cuda'))['model']
+    # waveglow_nvidia.eval()
+    # with torch.no_grad():
+    #     audio = waveglow_nvidia.infer(torch.tensor(mel.reshape(1, 80, -1), dtype=torch.float32).to('cuda'))
+    # audio_numpy = audio[0].data.cpu().numpy()
+    # rate = 16000
+    # soundfile.write("audio_nvidia.wav", audio_numpy, waveglow_rate)
+    
+plt.show()
+    
+    
+    

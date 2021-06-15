@@ -1,22 +1,26 @@
 
 
 # RAVDESS file format
-url:          'https://zenodo.org/record/1188976/files/Audio_Speech_Actors_01-24.zip?download=1'
+RAVDESS_url:          'https://zenodo.org/record/1188976/files/Audio_Speech_Actors_01-24.zip?download=1'
 actors         :   [ '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24']
 male_actors    :   [ '01', '03', '05', '07', '09', '11', '13', '15', '17', '19', '21', '23'] # male
 female_actors  :   [ '02', '04', '06', '08', '10', '12', '14', '16', '18', '20', '22', '24'] # female
 
-train_actors   :   [ '01', '02', '03', '04', '05', '06', '07', '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '20', '21', '22', '23', '24'] #'08', '19'
-test_actors    :   [ '08', '19'] # One male and one female actor is used for testing purposes
+train_actors   :   [ '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20'] #, '21', '22'] # '23', '24'
+valid_actors   :   [ '21', '22']
+test_actors    :   [ '23', '24'] # One male and one female actor is used for testing purposes
 
 emotions:     [ '01', '02', '03', '04', '05', '06', '07', '08']
 intensities:  [ '01', '02']
 repetitions:  [ '01', '02']
-statements:   [ '01'] #, '02']
+statements:   [ '01', '02']
+comb_repets:  [ '1', '2', '3', '4']
 
+# TESS file format 
+TESS_url:             'https://dataverse.scholarsportal.info/dataset.xhtml?persistentId=doi:10.5683/SP2/E8H2MF#'
 # audio parameters
-sample_rate         : 48000 # verified for all the files
-resampling_rate     : 16000
+sampling_rate       : 48000 # verified for all the files
+resampled_rate      : 16000
 n_mels              : 40 #80
 n_fft               : 400 #1024
 hop_length          : 160 #256
@@ -27,8 +31,8 @@ smoothing_wsize     : 10 #30
 smoothing_length    : 3 #6
 vad_mode            : 3
 remove_silences     : True
-train_epochs        : 15000 # number of training epochs
-use_logMel          : False # convert the MelSpec (power) to log-MelSpec (dB)
+train_epochs        : 5001 # number of training epochs
+use_logMel          : True # convert the MelSpec (power) to log-MelSpec (dB)
 dbfs                : -30
 window_size         : 25
 window_step         : 10
@@ -44,34 +48,24 @@ mel_fmin_tron        : 0.0
 mel_fmax_tron        : 8000.0
 
 # filepath parameters
-raw_audio_data              : 'data/raw/'
-speech1_data_raw            : 'data/interim/speech1_data.h5'
-speech2_data_raw            : 'data/interim/speech2_data.h5'
-speech1_data_refactor       : 'data/interim/speech1_refactor.h5'
-speech2_data_refactor       : 'data/interim/speech2_refactor.h5'
-speech1_no_intensity        : 'data/interim/speech1_no_intensity.h5'
-speech2_no_intensity        : 'data/interim/speech2_no_intensity.h5'
-speech1_MelSpec             : 'data/interim/speech1_MelSpec.h5'
-speech2_MelSpec             : 'data/interim/speech2_MelSpec.h5'     
+raw_audio_data_RAVDESS      : 'data/raw/RAVDESS'
+raw_audio_data_TESS         : 'data/raw/TESS'
 interim_data_dir            : 'data/interim'
+
+RAVDESS_waveform            : 'data/interim/RAVDESS_waveform.h5'
+RAVDESS_simple_40melspec    : 'data/interim/RAVDESS_simple_40melspec.h5'
+RAVDESS_simple_80melspec    : 'data/interim/RAVDESS_simple_80melspec.h5'
+RAVDESS_transform_80melspec : 'data/interim/RAVDESS_transform_80melspec.h5'
+     
 proc_data_dir               : 'data/proc'
 model_save_dir              : 'trained_models/'
 vis_dir                     : 'data/vis/'
-runs_dir                    : 'runs/'
-const_MelSpec1              : 'data/processed/speech1_const_MelSpec.h5'
-const_MelSpec2              : 'data/processed/speech2_const_MelSpec.h5'
-pooled_waveforms1           : 'data/processed/speech1_waveform.h5'
-pooled_waveforms2           : 'data/processed/speech2_waveform.h5'
-umap_speaker_embeddings     : 'data/processed/umap_speaker_embeds.h5'
-umap_resemblyzer_embeds1    : 'data/processed/umap_resemblyzer_embeds1.h5'
-umap_resemblyzer_embeds2    : 'data/processed/umap_resemblyzer_embeds2.h5'
+runs_dir                    : 'trained_runs/'
+const_40mel_simple          : 'data/processed/const_40mel_simple.h5'
+const_80mel_simple          : 'data/processed/const_80mel_simple.h5'
+const_80mel_transform       : 'data/processed/const_80mel_transform.h5'
 waveglow_model              : 'trained_models/waveglow_256channels_universal_v5.pt'
 
-# test data
-const_test_MelSpec1         : 'data/processed/speech1_test_MelSpec.h5'
-const_test_MelSpec2         : 'data/processed/speech2_test_MelSpec.h5'
-umap_resemblyzer_test1      : 'data/processed/umap_resemblyzer_test1.h5'
-umap_resemblyzer_test2      : 'data/processed/umap_resemblyzer_test2.h5'
 
 #model params
 batch_size : 32 #64

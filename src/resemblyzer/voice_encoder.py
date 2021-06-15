@@ -1,8 +1,8 @@
 # This file is from an open source project : "Resemblyzer" courtesy of author: Corentin Jemine
 # https://github.com/resemble-ai/Resemblyzer/blob/199c632495cfd288ca63b790e789616c91d44a01/resemblyzer/voice_encoder.py
 
-from resemblyzer import audio
-from resemblyzer.hparams import *
+from src.resemblyzer import audio
+from src.resemblyzer.hparams import *
 from pathlib import Path
 from typing import Union, List
 from torch import nn

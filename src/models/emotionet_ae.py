@@ -1,8 +1,8 @@
+from numpy.lib.npyio import save
 import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-from math import floor
 from torch.nn.modules.padding import ReflectionPad1d
 from torch.utils.tensorboard import SummaryWriter
 from yaml import safe_load
@@ -15,16 +15,7 @@ sys.path.append(os.getcwd())
 
 import matplotlib.pyplot as plt
 import librosa
-from src.datasets.create_dataset import preprocess
 np.random.seed(42)
-from scipy.optimize import brentq
-from scipy.interpolate import interp1d
-from sklearn.metrics import roc_curve
-import argparse
-from torch.utils.data import TensorDataset
-import webrtcvad
-import torchaudio
-from random import randint, sample
 import deepdish as dd
 from pathlib import Path
 import yaml
@@ -34,40 +25,21 @@ import umap
 class EmotionNet_AE(nn.Module):
     
     def __init__(self,
+                 n_mels,
                  load_model=False,
-                 epoch=0,
-                 device=torch.device('cpu')):
+                 epoch=1,
+                 device=torch.device('cpu'),
+                 use_speaker_embeds=False):
         
         super(EmotionNet_AE, self).__init__()
         with open('src/config.yaml', 'r') as f:
             self.config = safe_load(f.read())
 
         self.device = device
-        self.separate_speaker = False
+        self.n_mels = n_mels
+        self.use_speaker_embeds = use_speaker_embeds
         
-        # self.encoder = nn.Sequential(nn.Conv1d(self.config['n_mels'], 64, 4, 2, 1, 1), 
-        #                              nn.ReLU(True),                           
-        #                              nn.Conv1d(64, 32, 4, 2, 1), 
-        #                              nn.ReLU(True), 
-        #                              nn.Conv1d(32, 16, 4, 2, 1), 
-        #                              nn.ReLU(True), 
-        #                              nn.Conv1d(16, 16, 4, 2, 1), 
-        #                              nn.ReLU(True),                     
-        #                              nn.Conv1d(16, 128, 4, 2, 1), 
-        #                              nn.ReLU(True),
-        #                              nn.Conv1d(128, 256, 3, 2), 
-        #                              nn.ReLU(True)
-        #                              )
-
-        # self.decoder = nn.Sequential(nn.ReLU(True), nn.ConvTranspose1d(256, 128, 3),
-        #                             nn.ReLU(True), nn.ConvTranspose1d(128, 16, 4, 2),
-        #                             nn.ReLU(True), nn.ConvTranspose1d(16, 16, 4, 2, 1),
-        #                             nn.ReLU(True), nn.ConvTranspose1d(16, 32, 4, 2, 1),
-        #                             nn.ReLU(True), nn.ConvTranspose1d(32, 64, 4, 2, 1),
-        #                             nn.ReLU(True), nn.ConvTranspose1d(64, self.config['n_mels'], 4, 2, 1),
-        #                             )
-        
-        self.encoder = nn.Sequential(self.conv_block(self.config['n_mels'], 32, 32, 1, 0),
+        self.encoder = nn.Sequential(self.conv_block(self.n_mels, 32, 32, 1, 0),
                                     # nn.MaxPool1d(kernel_size=8, stride=2),
                                     self.conv_block(32, 64, 16, 1, 0),
                                     # # nn.MaxPool1d(kernel_size=8, stride=2),
@@ -86,13 +58,16 @@ class EmotionNet_AE(nn.Module):
                                     self.conv_transpose(64, 32, 16, 1, 0),
                                     nn.LeakyReLU(),
                                     # nn.MaxUnpool1d(kernel_size=8, stride=2),
-                                    self.conv_transpose(32, self.config['n_mels'], 32, 1, 0)
+                                    self.conv_transpose(32, self.n_mels, 32, 1, 0)
                                     )
         
         
         self.weight_init()  #call before more nn definitions
 
-        self.linear1 = nn.Linear(self.config['embedding_size'], self.config['n_emotions'])
+        if use_speaker_embeds:
+            self.linear1 = nn.Linear(self.config['embedding_size'] * 2, self.config['n_emotions'])
+        else:    
+            self.linear1 = nn.Linear(self.config['embedding_size'], self.config['n_emotions'])
        
         self.load_model = load_model
         self.epoch = epoch
@@ -102,11 +77,13 @@ class EmotionNet_AE(nn.Module):
         self.alpha = 10
         self.mse_loss = nn.MSELoss(reduction='mean')
         self.ce_loss = nn.CrossEntropyLoss(reduction='mean')
-        self.waveglow = torch.load(waveglow_path,map_location=torch.device('cpu'))['model']
-        self.waveglow.cpu().eval()
-        for k in self.waveglow.convinv:
-            k.float()
-        self.denoiser = Denoiser(self.waveglow)
+        
+        if self.n_mels == 80:
+            # load waveglow
+            self.waveglow = torch.hub.load('nvidia/DeepLearningExamples:torchhub', 'nvidia_waveglow')
+            self.waveglow = self.waveglow.remove_weightnorm(self.waveglow)
+            self.waveglow.to(self.device)
+            self.waveglow.eval()
         
     def conv_block(self, in_channels, out_channels, kernel_size, stride, dropout_prob):
         # pad the layers such that the output has the same size of input 
@@ -151,16 +128,18 @@ class EmotionNet_AE(nn.Module):
                     if m.bias is not None:
                         m.bias.data.fill_(0)
 
-
     def forward(self, x, speaker_embeds):
         # AutoEncoder
         embeds  = self.encoder(x)
         recon_x = self.decoder(embeds)
-        
-        # A linear layer with ReLu activation to classifiy the emotions
+
         embeds = embeds.view(-1, self.config['embedding_size'])
-        if self.separate_speaker:
-            embeds = torch.mul(embeds, speaker_embeds)# multiply the AE embeddings with the speaker embedding
+        
+        embeds = embeds.clone() / (torch.norm(embeds, dim=1, keepdim=True) + 1e-5)
+        
+        if self.use_speaker_embeds:
+            embeds = torch.cat((embeds, speaker_embeds.squeeze()), dim=1)# concatenate the AE embeddings with the speaker embedding
+        # A linear layer with ReLu activation to classifiy the emotions
         output = F.relu(self.linear1(embeds))
         
         return embeds, recon_x, output
@@ -194,11 +173,9 @@ class EmotionNet_AE(nn.Module):
                    device,
                    lr_scheduler=None,
                    load_model=False,
-                   checkpoint=None,
-                   separate_speaker=False):
+                   checkpoint=None):
 
         self.device = device
-        self.separate_speaker = separate_speaker
 
         model_log_dir = os.path.join(
             self.config['model_save_dir'], '{}'.format(self.__class__.__name__))
@@ -207,21 +184,21 @@ class EmotionNet_AE(nn.Module):
         
         if not load_model:  
             model_save_dir = os.path.join(os.path.join(
-                                      model_log_dir, "run_{}".format(
+                                      model_log_dir, "mel_{}_run_{}".format(self.n_mels,
                                       len(os.listdir(model_log_dir)) if os.path.exists(model_log_dir) else 0))
                                       )
             self.model_save_string = os.path.join(
                     model_save_dir, self.__class__.__name__ + '_Epoch_{}.pt')
             
-            os.makedirs(model_save_dir,exist_ok=True)
-            os.makedirs(self.config['vis_dir'],exist_ok=True)
+            os.makedirs(model_save_dir, exist_ok=True)
+            os.makedirs(self.config['vis_dir'], exist_ok=True)
             
             self.writer = SummaryWriter(log_dir=os.path.join(
-                                        run_log_dir, "run_{}".format(
+                                        run_log_dir, "mel_{}_run_{}".format(self.n_mels,
                                         len(os.listdir(run_log_dir)) if os.path.exists(run_log_dir) else 0)))
         else:
             model_save_dir = os.path.join(os.path.join(
-                                      model_log_dir, "run_{}".format(
+                                      model_log_dir, "mel_{}_run_{}".format(self.n_mels,
                                       len(os.listdir(model_log_dir)) - 1 if os.path.exists(model_log_dir) else 0))
                                       )
             self.model_save_string = os.path.join(
@@ -265,16 +242,21 @@ class EmotionNet_AE(nn.Module):
                 if epoch % 49 == 0:
                     lr_scheduler.step()
                 
-            if epoch % 499 == 0:
+            if epoch % 500 == 0:
                 print("Device: {}, Epoch: {}, Loss: {}, Accuracy: {}".format(self.device, epoch, np.mean(loss_vec), np.mean(accuracy_vec)))
-                aud = self.griffin_lim_aud(recon_x[-1].cpu().data.numpy())
+                
+                if self.n_mels == 40:
+                    aud = self.griffin_lim_aud(recon_x[-1].cpu().data.numpy(), save_audio=True)
+                else:
+                    aud = self.waveglow_aud(recon_x[-1].unsqueeze(dim=0), save_audio=True)
+                
                 torch.save(
                     {
                         'epoch': self.epoch,
                         'model_state_dict': self.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'loss': self.loss,
-                        'separate_speaker': self.separate_speaker,
+                        'use_speaker_embeds': self.use_speaker_embeds,
                     }, self.model_save_string.format(epoch))
                 
                 # reducer = umap.UMAP()
@@ -285,36 +267,42 @@ class EmotionNet_AE(nn.Module):
                 # plt.pause(.1)
                 
 
-    def griffin_lim_aud(self, spec):
+    def griffin_lim_aud(self, spec, save_audio=False):
         if self.config['use_logMel']:
             spec = librosa.db_to_power(spec)
         else:
             spec = spec
             
         y = librosa.feature.inverse.mel_to_audio(spec,
-                                            sr=self.config['resampling_rate'],
+                                            sr=self.config['resampled_rate'],
                                             n_fft=self.config['n_fft'],
                                             hop_length=self.config['hop_length'],
                                             win_length=self.config['win_length'])
 
-        soundfile.write(os.path.join(self.config['vis_dir'],
-                                    '{}.wav'.format(self.epoch)),
-                                    y,
-                                    samplerate=self.config['resampling_rate'])
+        if save_audio:
+            savepath = os.path.join(self.config['vis_dir'], 'Mel_{}'.format(str(self.n_mels)))
+            os.makedirs(savepath, exist_ok=True)
+            
+            savepath = os.path.join(savepath, 'epoch_{}.wav'.format(self.epoch))
+            
+            soundfile.write(savepath, y, samplerate=self.config['resampled_rate'])
         return y
 
-    def waveglow_aud(self,spec):
+    def waveglow_aud(self, spec, save_audio=False):
+        """ Convert the 80 mel spectrogram to audio using NVIDIA's Waveglow """
         with torch.no_grad():
-            audio = self.waveglow.infer(mel_outputs_postnet, sigma=0.666)
-            if self.denoise:
-                audio = self.denoiser(audio, strength=0.01)[:, 0]
-            audio = audio * self.config['max_wav_value']
-            audio = audio.squeeze()
-            audio = audio.cpu().numpy()
-            audio = audio.astype('int16')
-            return audio
+            audio = self.waveglow.infer(spec)
+        audio = audio[0].data.cpu().numpy()
+        
+        if save_audio:
+            savepath = os.path.join(self.config['vis_dir'], 'Mel_{}'.format(str(self.n_mels)))
+            os.makedirs(savepath, exist_ok=True)
+            
+            savepath = os.path.join(savepath, 'epoch_{}.wav'.format(self.epoch))
+            soundfile.write(savepath, audio, samplerate=22050)
+        
         return audio
-
+        
     def load_model_from_dict(self, checkpoint):
         """ Load the model from the checkpoint by filtering out the unnecessary parameters"""
         model_dict = self.state_dict()
@@ -327,15 +315,13 @@ class EmotionNet_AE(nn.Module):
         # load the new state dict
         self.load_state_dict(model_dict)     
 
-        if "separate_speaker" in checkpoint.keys():
-            self.separate_speaker = checkpoint['separate_speaker']
+        if "use_speaker_embeds" in checkpoint.keys():
+            self.use_speaker_embeds = checkpoint['use_speaker_embeds']
             
     def validate_model(self, dataloader, checkpoint=None):
 
         if checkpoint:
             self.load_model_from_dict(checkpoint)
-        else:
-            raise AssertionError("A trained model has to be provided")
         
         self.eval()
         embeds_vec, label_vec, accuracy_vec = [], [], []
@@ -361,10 +347,10 @@ if __name__ == "__main__":
     # The configuration file
     config = yaml.load(open('src/config.yaml'), Loader=yaml.SafeLoader) 
 
-    data = dd.io.load(str(Path(__file__).parents[2] / config['const_MelSpec1']))
-    model = EmotionNet_AE()
+    data = dd.io.load(str(Path(__file__).parents[2] / config['const_40mel_simple']))
+    model = EmotionNet_AE(n_mels=40)
     
-    embed, y, emotions = model.forward(data['features'][0:5].reshape(5, 40, -1))
+    embed, y, emotions = model.forward(data['features'][0:5].reshape(5, 40, -1), data['speaker_embeds'][0:5])
     print(embed.shape, y.shape, emotions.shape, data['labels'][0:5].shape)
     loss = model.loss_fn(data['features'][0:5], y, emotions, data['labels'][0:5])
     
