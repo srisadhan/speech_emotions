@@ -50,7 +50,7 @@ tensorboard-plugin-wit==1.6.0.post3
 tqdm==4.46.0
 typed-ast==1.4.1
 typing==3.6.4
-urllib3==1.26.5
+urllib3==1.26.17
 webrtcvad==2.0.10
 Werkzeug==1.0.1
 wget==3.2
